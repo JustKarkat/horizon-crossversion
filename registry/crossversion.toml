@@ -25,6 +25,7 @@ authors = ["JustKarkat"]
 owners = ["JustKarkat"]
 license = "MIT"
 source = "https://github.com/JustKarkat/horizon-crossversion"
+key = "RWTcPJHJYjPW0pV3lPwr45crCu0wJxW5HbDLc3fr3Eom1TzxO++kHOo4"
 
 [[versions]]
 version = "0.4.0"
@@ -32,4 +33,9 @@ published = "2026-11-01"
 game = "26.3"
 file = "crossversion-0.4.0.hnmod"
 sha256 = "5cf5ed0c16636a72da77d00f25923b2dc9938b66bcba2fc3571f2220f99f3f30"
+signature = """
+untrusted comment: signature from minisign secret key\r
+RUTcPJHJYjPW0sufgxegROTP9Mp0mOnggtNsendRR9PUL9gvOQAXIpX+gOSNinE/Xsze7pzBkvi7kgWqmR3hAeM/GZ8Wal97CQU=\r
+trusted comment: timestamp:1793593673	file:crossversion-0.4.0.hnmod	hashed\r
+NErBRO3f7O8sN/aQHf7Fsrqanubwgo9rCm/kuxSP0Oux21LiX6jcuMxeMykUmjtWP6AJDptFjdyAHlA7m0P9Dw=="""
 changelog = "First release: joins servers on older versions through a local ViaProxy, keeps them visible in the server list, answers ViaProxy's OpenAuthMod handshake with the player's account, and keeps a server transfer on the same proxy."
