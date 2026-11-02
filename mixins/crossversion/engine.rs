@@ -293,7 +293,7 @@ fn ensure_proxy(target: &str, settings: &Config, version: Option<&str>) -> Resul
     let port = free_port()?;
     let java = find_java(settings)?;
     let jar = ensure_assets()?;
-    let child = spawn(&java, &jar, target, port, version)?;
+    let child = spawn(&java, &jar, target, port, version, proxy_account())?;
     proxies.push(Proxy {
         port,
         target: target.to_owned(),
@@ -322,6 +322,7 @@ fn spawn(
     target: &str,
     port: u16,
     version: Option<&str>,
+    account: Option<usize>,
 ) -> Result<Child, String> {
     let mut child = Command::new(java)
         .arg("-jar")
@@ -330,9 +331,18 @@ fn spawn(
         .args(["--bind-address", &format!("127.0.0.1:{port}")])
         .args(["--target-address", target])
         .args(["--target-version", version.unwrap_or("auto")])
-        // Offline-mode only: the client never signs a session hash, so a server
-        // cannot have it sign one for somewhere else.
-        .args(["--auth-method", "NONE"])
+        // The client never signs a session hash: a server must not be able to
+        // have it sign one for somewhere else. So the proxy authenticates with
+        // the account the player added to it, or not at all.
+        .args(match account {
+            Some(index) => vec![
+                "--auth-method".to_owned(),
+                "ACCOUNT".to_owned(),
+                "--minecraft-account-index".to_owned(),
+                index.to_string(),
+            ],
+            None => vec!["--auth-method".to_owned(), "NONE".to_owned()],
+        })
         .current_dir(jar.parent().unwrap_or(Path::new(".")))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -412,6 +422,19 @@ fn ensure_assets() -> Result<PathBuf, String> {
     let folder = data_dir().join("viaproxy");
     let jar = folder.join(format!("ViaProxy-{VIAPROXY_VERSION}.jar"));
     fs::create_dir_all(&folder).map_err(|e| format!("{}: {e}", folder.display()))?;
+    // An install upgraded from 0.4.x still has the OpenAuthMod plugin, which is
+    // how that version had the client sign session hashes. Remove it.
+    if let Ok(entries) = fs::read_dir(folder.join("plugins")) {
+        for entry in entries.flatten() {
+            if entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("ViaProxyOpenAuthMod")
+            {
+                let _ = fs::remove_file(entry.path());
+            }
+        }
+    }
     fetch(
         &format!(
             "https://github.com/ViaVersion/ViaProxy/releases/download/v{VIAPROXY_VERSION}/ViaProxy-{VIAPROXY_VERSION}.jar"
@@ -600,11 +623,138 @@ fn release_major(home: &Path) -> Option<u32> {
     }
 }
 
+// ---- Account ----
+
+/// The index, in ViaProxy's own list, of the Microsoft account the player added
+/// there. The proxy logs in to online-mode servers with it; the client never
+/// touches the session, so no server can make it sign anything.
+pub fn proxy_account() -> Option<usize> {
+    let text = fs::read_to_string(data_dir().join("viaproxy").join("saves.json")).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&text).ok()?;
+    json["accountsV4"].as_array()?.iter().position(|account| {
+        account["accountType"]
+            .as_str()
+            .is_some_and(|kind| kind.ends_with("MicrosoftAccount"))
+    })
+}
+
+/// Where the sign-in is, as the settings page words it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SignIn {
+    /// Nothing started.
+    Idle,
+    /// Waiting for the player at Microsoft's page with this code.
+    Code { url: String, code: String },
+    /// The account was added; the proxy uses it from now on.
+    Done,
+    /// It timed out or failed; starting again asks Microsoft again.
+    Failed(String),
+}
+
+static SIGN_IN: Mutex<SignIn> = Mutex::new(SignIn::Idle);
+static SIGN_IN_CHILD: Mutex<Option<Child>> = Mutex::new(None);
+
+pub fn sign_in_state() -> SignIn {
+    if proxy_account().is_some() {
+        return SignIn::Done;
+    }
+    SIGN_IN.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// Ask Microsoft for a device code and wait for the player to approve it in a
+/// browser or on a phone. No Java window: ViaProxy's console does the same
+/// sign-in, and the code goes on the settings page.
+pub fn start_sign_in() -> Result<(), String> {
+    if proxy_account().is_some() {
+        return Ok(());
+    }
+    {
+        let child = SIGN_IN_CHILD.lock().unwrap_or_else(|e| e.into_inner());
+        if child.is_some() {
+            return Ok(());
+        }
+    }
+    let settings = config();
+    let java = find_java(&settings)?;
+    let jar = ensure_assets()?;
+    let mut process = Command::new(&java)
+        .arg("-jar")
+        .arg(&jar)
+        .args(["cli", "--bind-address", "127.0.0.1:0"])
+        .current_dir(jar.parent().unwrap_or(Path::new(".")))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| format!("cannot start the sign-in: {error}"))?;
+    let mut stdin = process
+        .stdin
+        .take()
+        .ok_or_else(|| "the sign-in has no console".to_owned())?;
+    let stdout = process
+        .stdout
+        .take()
+        .ok_or_else(|| "the sign-in has no output".to_owned())?;
+    *SIGN_IN.lock().unwrap_or_else(|e| e.into_inner()) = SignIn::Failed("starting".to_owned());
+    *SIGN_IN_CHILD.lock().unwrap_or_else(|e| e.into_inner()) = Some(process);
+    std::thread::spawn(move || {
+        use std::io::{BufRead, BufReader, Write};
+        std::thread::sleep(Duration::from_secs(12));
+        let _ = stdin.write_all(b"account add microsoft\n");
+        let _ = stdin.flush();
+        let reader = BufReader::new(stdout);
+        let started = Instant::now();
+        for line in reader.lines() {
+            let Ok(line) = line else { break };
+            if let Some(code) = device_code(&line) {
+                let url = format!("https://www.microsoft.com/link?otc={code}");
+                eprintln!("[crossversion] sign in at {url} with the code {code}");
+                *SIGN_IN.lock().unwrap_or_else(|e| e.into_inner()) = SignIn::Code { url, code };
+            }
+            if proxy_account().is_some() || started.elapsed() > Duration::from_secs(600) {
+                break;
+            }
+        }
+        if proxy_account().is_some() {
+            *SIGN_IN.lock().unwrap_or_else(|e| e.into_inner()) = SignIn::Done;
+        } else if started.elapsed() > Duration::from_secs(600) {
+            *SIGN_IN.lock().unwrap_or_else(|e| e.into_inner()) =
+                SignIn::Failed("the code expired; ask again".to_owned());
+        }
+        let _ = stdin.write_all(b"stop\n");
+        let _ = stdin.flush();
+        std::thread::sleep(Duration::from_secs(3));
+        if let Some(mut child) = SIGN_IN_CHILD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+        {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    });
+    Ok(())
+}
+
+/// `... visit https://www.microsoft.com/link?otc=ABCD1234 ...` or `... the code: ABCD1234`.
+fn device_code(line: &str) -> Option<String> {
+    let text = line.replace("\u{1b}[", "").replace('\x1b', "");
+    let tail = text
+        .split("otc=")
+        .nth(1)
+        .or_else(|| text.split("code: ").nth(1))?;
+    let code: String = tail
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric())
+        .collect();
+    (code.len() >= 4).then_some(code)
+}
+
 // ---- Settings ----
 
 /// The mod's own version, shown in Options > Mods. Keep in step with
 /// `horizon-mixin.toml`.
-pub const VERSION: &str = "0.5.0";
+pub const VERSION: &str = "0.6.0";
 
 /// What the settings page shows.
 pub fn summary() -> (bool, String, String) {

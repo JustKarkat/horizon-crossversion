@@ -18,13 +18,16 @@ Tested against a vanilla 1.20.1 server (protocol 763) and a 1.21.1 server
 (767): world load, chunks, entities, chat and the tab list all work. ViaProxy
 itself covers servers from 1.0 to 26.3.
 
-**Offline-mode servers only.** The proxy is started with `--auth-method NONE`
-and the client never signs a session hash. Answering ViaProxy's OpenAuthMod
-query would mean signing whatever hash arrives in a login query, and a server a
-player joins can send one too: it could have the client sign a hash for a
-server it runs, and log in as the player there. Horizon's registry review found
-exactly that. Online-mode servers therefore refuse the connection, as they do
-for any client that cannot authenticate.
+**Online-mode servers work through an account added to ViaProxy.** Horizon
+never signs a session hash: the proxy logs in to the server with the Microsoft
+account the player adds to it, once, from Options > Mods > Cross-version >
+Settings (the page shows the Microsoft device code, so a phone is enough). That
+is deliberate. Answering ViaProxy's OpenAuthMod query instead would mean
+signing whatever hash arrives in a login query, and a server a player joins can
+send one too, so it could have the client sign a hash for a server it runs and
+log in as the player there — Horizon's registry review found exactly that in
+0.4.0. The account and its refresh token live in ViaProxy's own save under
+`horizon-mods/.horizon-mod-data/crossversion/viaproxy/`, not in Horizon.
 
 Signed chat works too: from Horizon's Nightly 2026-11-01 on, the client holds
 a chat key pair and signs its messages, so online-mode servers with

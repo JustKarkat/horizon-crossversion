@@ -55,6 +55,15 @@ The tooltip on the badge was not done: the mixin tool refuses `RETURN` hooks in
 functions containing `?` or closures, and both `ping_tooltip` and the list
 drawing code contain them. The badge text carries the explanation instead.
 
+## Account sign-in (0.6.0)
+
+Options > Mods > Cross-version > Settings asks ViaProxy's console for a
+Microsoft device code and puts it on the page: a windowed build showed
+`At microsoft.com/link enter XPHRHB5F (click for a new code)`, and the game log
+carried `sign in at https://www.microsoft.com/link?otc=XPHRHB5F`. Approving the
+code (which needs the account owner) was not done here; the online-mode join
+after it is the one row still to confirm.
+
 ## Not covered
 
 - **Horizon older than Nightly 2026-11-01.** Those builds send unsigned chat
