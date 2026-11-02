@@ -19,10 +19,13 @@ Tested against a vanilla 1.20.1 server (protocol 763) and a 1.21.1 server
 itself covers servers from 1.0 to 26.3. An **online-mode** 1.20.1 server
 accepts the player's own account through the proxy.
 
-One caveat, and it is Horizon's rather than the proxy's: on servers with
-`enforce-secure-profile=true` (the default for online-mode servers since
-1.19.3) Horizon's chat is disabled, with or without this mod, because the
-client does not hold a player certificate. Commands still work.
+Signed chat works too: from Horizon's Nightly 2026-11-01 on, the client holds
+a chat key pair and signs its messages, so online-mode servers with
+`enforce-secure-profile=true` accept them through the proxy
+(`<JustKarkat> …`, not `[Not Secure]`). On Horizon before that nightly (the
+mod's 0.1.x pinned an earlier commit) secure-profile servers refused the chat
+and said "Chat disabled due to missing profile public key" — the client's gap,
+not the proxy's.
 
 ## What it does, precisely
 

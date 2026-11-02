@@ -1,7 +1,8 @@
 # Validation
 
 Validated on Linux (CachyOS, x86-64) on 2026-11-01 with Rust 1.95.0, using the
-exact revisions in `compatibility.json` and the bundle in this repository.
+exact revisions in `compatibility.json` (Horizon Nightly 2026-11-01,
+`07b7ea3`) and the bundle in this repository.
 
 | Check | Result |
 |---|---|
@@ -27,21 +28,21 @@ A build from `tools/horizon.py build` was run offscreen and joined through
 | Vanilla 26.3 (the client's own version) | No routing at all: no `[crossversion]` line, no JVM started |
 | Vanilla 1.20.1, `online-mode=true`, port 25584, fixed answer (`HORIZON_CROSSVERSION_AUTH=ok`) | ViaProxy's `oam:join` query was answered and the proxy went on to log in; the server refused it with "invalid session" because the answer was a fixed `true`, not a Mojang join. Shows the answer reaches the proxy intact |
 | Vanilla 1.20.1, `online-mode=true`, port 25584, **real account** | **Joined, authenticated as the signed-in account**: the server logged `UUID of player JustKarkat is 5166e6e4-…`, `JustKarkat[…] logged in`, `JustKarkat joined the game`; the client had 201 chunks. The session came from `horizon-launcher play --arg --help`, which writes the session file and exits before the game reads it |
-| Vanilla 26.3, `online-mode=true`, port 25585, direct (no proxy) | Joined as the account; chat is disabled by the client itself: "Chat disabled due to missing profile public key" |
+| Vanilla 1.20.1, `online-mode=true`, port 25584, **signed chat** | `<JustKarkat> signed chat through the proxy` in the server log — no `[Not Secure]` prefix, so the server verified the signature the client made |
+| Vanilla 1.21.1, port 25582, chat | `[Not Secure] <Tester7> hello 1.21.1` (offline server, no profile key possible — correct) |
+| Vanilla 26.3, `online-mode=true`, port 25585, direct (no proxy) | No proxy started (0 routing lines); `<JustKarkat> 26.3 secure chat after the update` — signed chat works against a same-version server too |
 | First run with no cached jar | ViaProxy 3.4.14 downloaded (49 MB), SHA-256 verified, joined |
 | No Java on the machine (`HORIZON_CROSSVERSION_INSTALL_JAVA=1`) | Mojang's `java-runtime-delta` (Java 21, 423 files) installed into `<game home>/runtime/`, then joined through it |
 | Leaving the server | The proxy process is gone and `proxies.json` is empty |
 
 ## Not covered
 
-- **Secure-profile chat.** With `enforce-secure-profile=true` (the default on
-  online-mode servers since 1.19.3) Horizon's chat is disabled whether or not
-  the proxy is used: the client sends unsigned chat (`signature: None`,
-  `send_chat` in `game/remote.rs`) and never sends a `ChatSessionUpdate`, so
-  the server reports no profile key and the client shows "Chat disabled due to
-  missing profile public key". This is a Horizon gap, not a proxy one —
-  commands still work. Fixing it needs player certificates from
-  `api.minecraftservices.com/player/certificates` and signing in the client.
+- **Horizon older than Nightly 2026-11-01.** Those builds send unsigned chat
+  (`signature: None`) and no `ChatSessionUpdate`, so a secure-profile server
+  refuses chat with "Chat disabled due to missing profile public key". This mod
+  now pins `07b7ea3`, which has the client-side chat session (Horizon commit
+  `eaf1507`, "Secure chat on a server's client"). Horizon issue #5936 tracks the
+  old behaviour.
 - **Bedrock** targets.
 - Windows and macOS: the process cleanup and Java discovery have platform
   branches that compiled but were not run. The pid reaping verifies the command

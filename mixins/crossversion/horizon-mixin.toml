@@ -1,10 +1,10 @@
 [mod]
 id = "crossversion"
-version = "0.1.1"
+version = "0.2.0"
 priority = 100
 
 [compatibility]
-horizon_revision = "ba6344a59cb9e755b730dcf02285fc0d33b97d3c"
+horizon_revision = "07b7ea30d02973e7bc7579ea1e914dac2a9eca01"
 
 # The OAM (OpenAuthMod) packet logic and the shared state the hooks use. It
 # lives in horizon-protocol because the two packet hooks compile inside that
