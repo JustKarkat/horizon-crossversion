@@ -1,0 +1,35 @@
+id = "crossversion"
+kind = "native-mod"
+name = "Cross-version"
+summary = "Join servers on older Minecraft versions: reads the server's version and runs ViaProxy locally for the hop."
+description = """
+Horizon speaks one protocol, 26.3 (777). This mod lets it join servers that speak an older one.
+
+On a join, it reads the server's version from its status reply. If it is not 26.3, it starts ViaProxy on a loopback port and points the join at it; ViaProxy speaks 26.3 to Horizon and the server's own version to the server. A join to a 26.3 server is never routed, and nothing else about the client changes.
+
+The server list shows what ViaProxy can join: a server whose status says another version keeps its ping bars green and shows its version in green above the MOTD ("PaperSpigot 1.8.8 · via ViaProxy") instead of the red incompatible cross.
+
+Online-mode servers work: ViaProxy's OpenAuthMod handshake is answered with the player's own account, and chat arrives signed. Tested against vanilla 1.20.1 (763), 1.21.1 (767) and 26.3, and against public 1.8.x networks.
+
+What it downloads and runs (stated plainly):
+- ViaProxy 3.4.14 and the ViaProxyOpenAuthMod 1.0.2 plugin, both GPL-3.0, from their GitHub releases on first use, into horizon-mods/.horizon-mod-data/crossversion/, each checked against a SHA-256 pinned in the source. They are not bundled with this mod and are not built from its source.
+- Java: an installed Java 17+ is used; if there is none, Mojang's Java 21 runtime (java-runtime-delta) is installed into the game home's runtime/ folder, sha1-checked, as the official launcher does.
+- ViaProxy runs as a child process of the game, on 127.0.0.1 only, and is stopped when you leave the server (and by a small pid file after a crash).
+
+Settings live in horizon-mods/.horizon-mod-data/crossversion/config.json: "enabled", "always", and "servers", which names a target version for a network whose front reports the client's own version while its lobbies are older (for example {"minevia.club": "1.8"}). Options > Mods > Cross-version has a settings page that turns the mod on or off and deletes the downloaded ViaProxy.
+
+It does not do: Bedrock servers; old clients joining a Horizon world (that is the other direction); making a non-vanilla client pass server-side anti-cheat; or fixing protocol differences Horizon itself has.
+
+MIT. Requires an internet connection the first time (about 49 MB for ViaProxy, and about 180 MB if Java has to be installed)."""
+authors = ["JustKarkat"]
+owners = ["JustKarkat"]
+license = "MIT"
+source = "https://github.com/JustKarkat/horizon-crossversion"
+
+[[versions]]
+version = "0.4.0"
+published = "2026-11-01"
+game = "26.3"
+file = "crossversion-0.4.0.hnmod"
+sha256 = "5cf5ed0c16636a72da77d00f25923b2dc9938b66bcba2fc3571f2220f99f3f30"
+changelog = "First release: joins servers on older versions through a local ViaProxy, keeps them visible in the server list, answers ViaProxy's OpenAuthMod handshake with the player's account, and keeps a server transfer on the same proxy."
