@@ -65,6 +65,10 @@ struct Config {
     always: bool,
     /// A `java` to use instead of finding or installing one.
     java: Option<PathBuf>,
+    /// Servers the status cannot describe: address -> the target version to
+    /// translate to (for a network whose front reports the client's own
+    /// version while its lobbies are older).
+    servers: Vec<(String, String)>,
 }
 
 impl Default for Config {
@@ -76,6 +80,7 @@ impl Default for Config {
             ),
             always: std::env::var_os("HORIZON_CROSSVERSION_ALWAYS").is_some(),
             java: std::env::var_os("HORIZON_CROSSVERSION_JAVA").map(PathBuf::from),
+            servers: Vec::new(),
         }
     }
 }
@@ -96,10 +101,27 @@ fn config() -> Config {
             eprintln!("[crossversion] {} is not JSON; using defaults", path.display());
             return defaults;
         };
+        // An environment override is for experiments and wins over the file.
+        let env_on = std::env::var_os("HORIZON_CROSSVERSION").is_some();
         Config {
-            enabled: json["enabled"].as_bool().unwrap_or(defaults.enabled),
-            always: json["always"].as_bool().unwrap_or(defaults.always),
-            java: json["java"].as_str().map(PathBuf::from).or(defaults.java),
+            enabled: if env_on {
+                defaults.enabled
+            } else {
+                json["enabled"].as_bool().unwrap_or(defaults.enabled)
+            },
+            always: json["always"].as_bool().unwrap_or(defaults.always) || defaults.always,
+            java: defaults.java.or_else(|| json["java"].as_str().map(PathBuf::from)),
+            servers: json["servers"]
+                .as_object()
+                .map(|servers| {
+                    servers
+                        .iter()
+                        .filter_map(|(address, version)| {
+                            Some((address.clone(), version.as_str()?.to_owned()))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
         }
     })
     .clone()
@@ -114,6 +136,11 @@ struct Proxy {
 static PROXIES: Mutex<Vec<Proxy>> = Mutex::new(Vec::new());
 static REAPED: Mutex<bool> = Mutex::new(false);
 
+thread_local! {
+    /// Set while `route` pings: that ping must keep the real protocol.
+    static IN_ROUTE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// Where a join should go: `Some("127.0.0.1:<port>")` when the server needs the
 /// proxy, `None` to leave the client alone.
 pub fn route(address: &str) -> Option<String> {
@@ -126,18 +153,38 @@ pub fn route(address: &str) -> Option<String> {
     }
     reap_once();
 
-    let protocol = ping_protocol(address);
-    let translated = protocol.is_some_and(|protocol| protocol != horizon_protocol::PROTOCOL_VERSION);
+    // A network whose front reports whatever the client speaks, while its
+    // lobbies are older, is named in the config instead.
+    let forced = settings
+        .servers
+        .iter()
+        .find(|(known, _)| known == address)
+        .map(|(_, version)| version.clone());
+    let protocol = if forced.is_some() {
+        None
+    } else {
+        IN_ROUTE.with(|flag| flag.set(true));
+        let protocol = ping_protocol(address);
+        IN_ROUTE.with(|flag| flag.set(false));
+        protocol
+    };
+    let translated = forced.is_some()
+        || protocol.is_some_and(|protocol| protocol != horizon_protocol::PROTOCOL_VERSION);
     if !translated && !settings.always {
         horizon_protocol::crossversion::disarm();
         return None;
     }
 
-    eprintln!(
-        "[crossversion] {address} speaks protocol {}; starting the proxy",
-        protocol.map_or_else(|| "?".to_owned(), |protocol| protocol.to_string())
-    );
-    match ensure_proxy(address, &settings) {
+    match &forced {
+        Some(version) => eprintln!(
+            "[crossversion] {address} is configured for target version {version}; starting the proxy"
+        ),
+        None => eprintln!(
+            "[crossversion] {address} speaks protocol {}; starting the proxy",
+            protocol.map_or_else(|| "?".to_owned(), |protocol| protocol.to_string())
+        ),
+    }
+    match ensure_proxy(address, &settings, forced.as_deref()) {
         Ok(port) => {
             arm_auth();
             Some(format!("127.0.0.1:{port}"))
@@ -204,7 +251,7 @@ fn stop(mut proxy: Proxy) {
 }
 
 /// A port this instance of ViaProxy is listening on, or a fresh one.
-fn ensure_proxy(target: &str, settings: &Config) -> Result<u16, String> {
+fn ensure_proxy(target: &str, settings: &Config, version: Option<&str>) -> Result<u16, String> {
     let mut proxies = PROXIES.lock().unwrap_or_else(|e| e.into_inner());
     // Reuse a live one; drop a dead one.
     if let Some(index) = proxies.iter().position(|proxy| proxy.target == target) {
@@ -216,7 +263,7 @@ fn ensure_proxy(target: &str, settings: &Config) -> Result<u16, String> {
     let port = free_port()?;
     let java = find_java(settings)?;
     let jar = ensure_assets()?;
-    let child = spawn(&java, &jar, target, port)?;
+    let child = spawn(&java, &jar, target, port, version)?;
     proxies.push(Proxy {
         port,
         target: target.to_owned(),
@@ -239,14 +286,20 @@ fn free_port() -> Result<u16, String> {
         .map_err(|e| format!("no free port: {e}"))
 }
 
-fn spawn(java: &Path, jar: &Path, target: &str, port: u16) -> Result<Child, String> {
+fn spawn(
+    java: &Path,
+    jar: &Path,
+    target: &str,
+    port: u16,
+    version: Option<&str>,
+) -> Result<Child, String> {
     let mut child = Command::new(java)
         .arg("-jar")
         .arg(jar)
         .arg("cli")
         .args(["--bind-address", &format!("127.0.0.1:{port}")])
         .args(["--target-address", target])
-        .args(["--target-version", "auto"])
+        .args(["--target-version", version.unwrap_or("auto")])
         .args(["--auth-method", "OPENAUTHMOD"])
         .current_dir(jar.parent().unwrap_or(Path::new(".")))
         .stdin(Stdio::null())
@@ -259,7 +312,7 @@ fn spawn(java: &Path, jar: &Path, target: &str, port: u16) -> Result<Child, Stri
     // explain a startup failure.
     let errors = Arc::new(Mutex::new(Vec::<String>::new()));
     if let Some(stdout) = child.stdout.take() {
-        drain(stdout, None);
+        drain(stdout, Some(errors.clone()));
     }
     if let Some(stderr) = child.stderr.take() {
         drain(stderr, Some(errors.clone()));
@@ -653,6 +706,85 @@ fn java_platform() -> Option<&'static str> {
     })
 }
 
+// ---- Server list ----
+
+/// The server list pings every server. A server this mod would route answers as
+/// if it spoke this game's protocol, with its own version in green above the
+/// MOTD, so the list shows it as joinable instead of "Incompatible version!".
+/// Runs as a cancellable HEAD: when it answers, the client's own ping does not
+/// run; when it cannot (no status, or this is our own routing ping) the real
+/// `net::ping` does, unchanged.
+pub fn ping_head(
+    address: &str,
+) -> std::ops::ControlFlow<Result<(serde_json::Value, u128), String>> {
+    use std::ops::ControlFlow;
+    if IN_ROUTE.with(|flag| flag.get()) || !config().enabled {
+        return ControlFlow::Continue(());
+    }
+    match status_query(address) {
+        Some((json, ms)) => ControlFlow::Break(Ok((badge(json, address), ms))),
+        None => ControlFlow::Continue(()),
+    }
+}
+
+/// The same status exchange `net::ping` makes, through the protocol crate so we
+/// keep SRV resolution and the exact packet shapes.
+fn status_query(address: &str) -> Option<(serde_json::Value, u128)> {
+    use horizon_protocol::{
+        connection::Connection,
+        packets::{Empty, handshake, status},
+    };
+    let (host, port) = horizon_protocol::servers::parse_address(address)?;
+    let mut connection =
+        Connection::connect_server(&host, port, PING_TIMEOUT).ok()?;
+    connection.reader.set_read_timeout(Some(PING_TIMEOUT)).ok()?;
+    let intention = handshake::Serverbound::Intention(handshake::Intention {
+        protocol: horizon_protocol::PROTOCOL_VERSION,
+        host: host.clone(),
+        port,
+        intent: handshake::STATUS,
+    });
+    connection.send(&intention.encode()).ok()?;
+    connection
+        .send(&status::Serverbound::StatusRequest(Empty).encode())
+        .ok()?;
+    let (id, payload) = connection.recv().ok()?;
+    let json = match status::Clientbound::decode(id, &payload).ok()? {
+        status::Clientbound::StatusResponse(response) => {
+            serde_json::from_str::<serde_json::Value>(&response.json).ok()?
+        }
+        _ => return None,
+    };
+    let started = Instant::now();
+    connection
+        .send(&status::Serverbound::PingRequest(status::Ping { time: 1 }).encode())
+        .ok()?;
+    let _ = connection.recv();
+    Some((json, started.elapsed().as_millis()))
+}
+
+/// A status that is not this game's version, dressed as one.
+fn badge(mut json: serde_json::Value, address: &str) -> serde_json::Value {
+    let protocol = json["version"]["protocol"].as_i64().unwrap_or(0);
+    // A legacy answer with no version, or this game's own: leave it alone.
+    if protocol == 0 || protocol == i64::from(horizon_protocol::PROTOCOL_VERSION) {
+        return json;
+    }
+    let name = json["version"]["name"].as_str().unwrap_or("?").to_owned();
+    eprintln!("[crossversion] {address} speaks {name}; the list shows it as joinable");
+    let badge = serde_json::json!({
+        "text": format!("{name} · via ViaProxy\n"),
+        "color": "green",
+    });
+    let description = json
+        .get("description")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    json["description"] = serde_json::Value::Array(vec![badge, description]);
+    json["version"]["protocol"] = serde_json::json!(horizon_protocol::PROTOCOL_VERSION);
+    json
+}
+
 // ---- Leftover proxies ----
 
 /// A proxy outlives a crash, so each start kills the ones a previous run left.
@@ -759,6 +891,29 @@ mod tests {
         assert_eq!(safe_path(root, "bin/../../escape"), None);
         assert_eq!(safe_path(root, "/abs"), None);
         assert_eq!(safe_path(root, "a\\b"), None);
+    }
+
+    #[test]
+    fn a_joinable_server_is_badged_green() {
+        let json = serde_json::json!({
+            "version": {"name": "1.20.1", "protocol": 763},
+            "description": {"text": "A server"},
+        });
+        let out = badge(json, "example.test");
+        assert_eq!(out["version"]["protocol"], 777);
+        let lines = out["description"].as_array().unwrap();
+        assert_eq!(lines[0]["text"], "1.20.1 · via ViaProxy\n");
+        assert_eq!(lines[0]["color"], "green");
+        assert_eq!(lines[1]["text"], "A server");
+    }
+
+    #[test]
+    fn the_badge_leaves_this_version_alone() {
+        let json = serde_json::json!({
+            "version": {"name": "26.3", "protocol": 777},
+            "description": "hi",
+        });
+        assert_eq!(badge(json.clone(), "example.test"), json);
     }
 
     #[test]

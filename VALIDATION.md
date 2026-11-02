@@ -35,6 +35,26 @@ A build from `tools/horizon.py build` was run offscreen and joined through
 | No Java on the machine (`HORIZON_CROSSVERSION_INSTALL_JAVA=1`) | Mojang's `java-runtime-delta` (Java 21, 423 files) installed into `<game home>/runtime/`, then joined through it |
 | Leaving the server | The proxy process is gone and `proxies.json` is empty |
 
+## Server list
+
+A windowed build was opened on the title screen, Multiplayer clicked, and the
+list screenshotted with the player's own `servers.dat`:
+
+| Entry | Shown |
+|---|---|
+| Horizon Official (26.3) | unchanged: no badge, green bars |
+| Community SMP (status: PaperSpigot 1.8.8) | `PaperSpigot 1.8.8 · via ViaProxy` in green, green bars, 1/25 |
+| MC.Jungle (status: BungeeCord 1.8.x-1.21.x) | `BungeeCord 1.8.x-1.21.x · via ViaProxy`, green bars, 0/100 |
+
+A network whose status echoes the client's protocol (Minevia, "Minevia Proxy")
+cannot be told apart, so it gets no badge; naming it in `servers` with the
+version its lobbies speak makes the join work (verified: `[26.3 <-> 1.8.x]`,
+configuration finished, play state).
+
+The tooltip on the badge was not done: the mixin tool refuses `RETURN` hooks in
+functions containing `?` or closures, and both `ping_tooltip` and the list
+drawing code contain them. The badge text carries the explanation instead.
+
 ## Not covered
 
 - **Horizon older than Nightly 2026-11-01.** Those builds send unsigned chat

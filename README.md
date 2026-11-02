@@ -38,6 +38,28 @@ not the proxy's.
 | Stops the proxy when the player leaves | `session_end.rs`, a `HEAD` hook on `Session::disconnect` |
 | Kills proxies a crash left behind | `reap_once()`, a pid file in the mod's data folder |
 
+### The server list
+
+A server whose status says it speaks another version is listed as joinable
+rather than with the red "Incompatible version!" cross: its own version appears
+in green above the MOTD (`PaperSpigot 1.8.8 · via ViaProxy`) and its ping bars
+stay green. Pinging is done by the mod for that judgement, with the real status
+request, so the version shown is the server's.
+
+One case the status cannot describe: a network whose front (BungeeCord,
+Velocity) echoes whatever protocol the client speaks while its lobbies are
+older. It looks like 26.3 from the outside, so nothing is routed and the lobby
+rejects the join with "Outdated server! I'm still on 1.8.8". Name it in the
+config with the version its lobbies speak:
+
+```json
+{
+  "servers": { "minevia.club": "1.8" }
+}
+```
+
+The join then goes through the proxy without asking the server first.
+
 ### Downloads, and why this costs little
 
 On first use the mod downloads two GPL-3.0 jars it does not bundle — ViaProxy

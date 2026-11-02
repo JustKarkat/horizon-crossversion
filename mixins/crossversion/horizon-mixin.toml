@@ -1,6 +1,6 @@
 [mod]
 id = "crossversion"
-version = "0.2.0"
+version = "0.3.0"
 priority = 100
 
 [compatibility]
@@ -74,3 +74,12 @@ target = "horizon_client::net::Session::disconnect"
 kind = "HEAD"
 helper = "session_end.rs"
 bindings = [{ name = "session", ty = "&crate::net::Session", value = "&*self" }]
+
+# The server list: show a routed server as compatible, with its version.
+[[injection]]
+id = "ping-badge"
+target = "horizon_client::net::ping"
+kind = "HEAD"
+cancellable = true
+helper = "ping.rs"
+bindings = [{ name = "address", ty = "&str", value = "address" }]
