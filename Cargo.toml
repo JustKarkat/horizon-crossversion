@@ -1,0 +1,14 @@
+[package]
+name = "horizon-crossversion"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+description = "Cross-version support for Horizon: a native mod that runs ViaProxy locally"
+
+[lib]
+# This exact source is also injected as a same-crate module by horizon-mixins.
+path = "mixins/crossversion/proto.rs"
+
+[workspace]
+resolver = "2"

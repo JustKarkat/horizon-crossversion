@@ -1,0 +1,76 @@
+[mod]
+id = "crossversion"
+version = "0.1.0"
+priority = 100
+
+[compatibility]
+horizon_revision = "ba6344a59cb9e755b730dcf02285fc0d33b97d3c"
+
+# The OAM (OpenAuthMod) packet logic and the shared state the hooks use. It
+# lives in horizon-protocol because the two packet hooks compile inside that
+# crate; horizon-client depends on it and so can reach it too.
+[[module]]
+id = "protocol"
+file = "crates/horizon-protocol/src/lib.rs"
+name = "crossversion"
+source = "proto.rs"
+visibility = "pub"
+
+# The proxy manager: config, Java discovery, ViaProxy download, spawn/reap.
+[[module]]
+id = "engine"
+file = "crates/horizon-client/src/net.rs"
+name = "crossversion"
+source = "engine.rs"
+
+# A join: rewrite the address to the loopback proxy when the server is not 26.3.
+[[injection]]
+id = "route-connect"
+target = "horizon_client::net::Session::connect"
+kind = "MODIFY_ARG"
+selector = "Self::start"
+require = 1
+ordinal = 0
+argument = 0
+helper = "route.rs"
+bindings = [{ name = "address", ty = "&str", value = "$value" }]
+
+# The same for a transfer (BungeeCord/Velocity forwarding), which carries cookies.
+[[injection]]
+id = "route-transferred"
+target = "horizon_client::net::Session::connect_transferred"
+kind = "MODIFY_ARG"
+selector = "Self::start"
+require = 1
+ordinal = 0
+argument = 0
+helper = "route.rs"
+bindings = [{ name = "address", ty = "&str", value = "$value" }]
+
+# Look at every incoming packet for ViaProxy's OpenAuthMod login query.
+[[injection]]
+id = "oam-observe"
+target = "horizon_protocol::connection::Connection::recv"
+kind = "RETURN"
+helper = "oam_recv.rs"
+bindings = [{ name = "value", ty = "Result<(i32, Vec<u8>)>", value = "$value" }]
+
+# Rewrite the client's "no payload" answer into the OpenAuthMod reply.
+[[injection]]
+id = "oam-answer"
+target = "horizon_protocol::connection::Connection::send"
+kind = "MODIFY_ARG"
+selector = "self.writer.send"
+require = 1
+ordinal = 0
+argument = 0
+helper = "oam_send.rs"
+bindings = [{ name = "body", ty = "&[u8]", value = "$value" }]
+
+# The session ended (the player left, or the connection dropped): stop its proxy.
+[[injection]]
+id = "session-end"
+target = "horizon_client::net::Session::disconnect"
+kind = "HEAD"
+helper = "session_end.rs"
+bindings = [{ name = "session", ty = "&crate::net::Session", value = "&*self" }]
