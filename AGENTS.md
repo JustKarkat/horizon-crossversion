@@ -6,17 +6,18 @@ sources into ignored target trees; never modify the original checkout or player
 resources. Do not commit jars, downloaded runtimes, exported sources or
 Minecraft assets.
 
-The bundle injects two modules: `mixins/crossversion/proto.rs` into
-`crates/horizon-protocol/src/lib.rs` (public, so the client can arm it) and
-`mixins/crossversion/engine.rs` into `crates/horizon-client/src/net.rs`. The
-engine is the mod's standalone Cargo library, so it may only use what
-`horizon-client` already depends on (ureq, sha1, sha2, serde_json) — no new
-dependencies: the workspace is built `--locked --offline`. `proto.rs` uses
-`std` only.
+The bundle injects three modules: `mixins/crossversion/decisions.rs` and
+`mixins/crossversion/engine.rs` into `crates/horizon-client/src/net.rs`
+(`crossversion_decisions` and `crossversion`), and `mixins/crossversion/ui.rs`
+into `crates/horizon-client/src/game/mods.rs` (`crossversion_ui`, the
+Options > Mods row and its settings page). `decisions.rs` is the standalone
+Cargo library, so it compiles and tests on its own; `engine.rs` may only use
+what `horizon-client` already depends on (ureq, sha1, sha2, serde_json) — no new
+dependencies: the game workspace is built `--locked --offline`.
 
 Hooks are declarative in `horizon-mixin.toml`; never rewrite Rust source by
-hand. Hook adapters stay tiny typed functions (`route.rs`, `oam_recv.rs`,
-`oam_send.rs`, `session_end.rs`) and call into the injected module, because a
+hand. Hook adapters stay tiny typed functions (`route.rs`, `ping.rs`,
+`ui_mods.rs`, `ui_settings.rs`, `ui_click.rs`, `session_end.rs`) and call into the injected module, because a
 helper may not take explicit generic parameters and `RETURN` bindings must
 match the target's declared type text exactly.
 

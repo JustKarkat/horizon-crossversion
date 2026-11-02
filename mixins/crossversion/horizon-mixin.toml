@@ -1,20 +1,18 @@
 [mod]
 id = "crossversion"
-version = "0.4.0"
+version = "0.5.0"
 priority = 100
 
 [compatibility]
 horizon_revision = "07b7ea30d02973e7bc7579ea1e914dac2a9eca01"
 
-# The OAM (OpenAuthMod) packet logic and the shared state the hooks use. It
-# lives in horizon-protocol because the two packet hooks compile inside that
-# crate; horizon-client depends on it and so can reach it too.
+# The pure decisions (how a status becomes a server-list entry): also the
+# standalone Cargo library, so they are unit tested on their own.
 [[module]]
-id = "protocol"
-file = "crates/horizon-protocol/src/lib.rs"
-name = "crossversion"
-source = "proto.rs"
-visibility = "pub"
+id = "decisions"
+file = "crates/horizon-client/src/net.rs"
+name = "crossversion_decisions"
+source = "decisions.rs"
 
 # Options > Mods: the row and its settings page.
 [[module]]
@@ -54,26 +52,6 @@ ordinal = 0
 argument = 0
 helper = "route.rs"
 bindings = [{ name = "address", ty = "&str", value = "$value" }]
-
-# Look at every incoming packet for ViaProxy's OpenAuthMod login query.
-[[injection]]
-id = "oam-observe"
-target = "horizon_protocol::connection::Connection::recv"
-kind = "RETURN"
-helper = "oam_recv.rs"
-bindings = [{ name = "value", ty = "Result<(i32, Vec<u8>)>", value = "$value" }]
-
-# Rewrite the client's "no payload" answer into the OpenAuthMod reply.
-[[injection]]
-id = "oam-answer"
-target = "horizon_protocol::connection::Connection::send"
-kind = "MODIFY_ARG"
-selector = "self.writer.send"
-require = 1
-ordinal = 0
-argument = 0
-helper = "oam_send.rs"
-bindings = [{ name = "body", ty = "&[u8]", value = "$value" }]
 
 # The session ended (the player left, or the connection dropped): stop its proxy.
 [[injection]]

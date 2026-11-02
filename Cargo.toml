@@ -1,6 +1,6 @@
 [package]
 name = "horizon-crossversion"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT"
@@ -8,7 +8,11 @@ description = "Cross-version support for Horizon: a native mod that runs ViaProx
 
 [lib]
 # This exact source is also injected as a same-crate module by horizon-mixins.
-path = "mixins/crossversion/proto.rs"
+path = "mixins/crossversion/decisions.rs"
+
+[dependencies]
+# The decisions module is also injected into the game, which has this already.
+serde_json = "1"
 
 [workspace]
 resolver = "2"

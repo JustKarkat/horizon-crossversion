@@ -16,8 +16,15 @@ Horizon client ──26.3──▶ 127.0.0.1:<port>  ViaProxy  ──server's ve
 
 Tested against a vanilla 1.20.1 server (protocol 763) and a 1.21.1 server
 (767): world load, chunks, entities, chat and the tab list all work. ViaProxy
-itself covers servers from 1.0 to 26.3. An **online-mode** 1.20.1 server
-accepts the player's own account through the proxy.
+itself covers servers from 1.0 to 26.3.
+
+**Offline-mode servers only.** The proxy is started with `--auth-method NONE`
+and the client never signs a session hash. Answering ViaProxy's OpenAuthMod
+query would mean signing whatever hash arrives in a login query, and a server a
+player joins can send one too: it could have the client sign a hash for a
+server it runs, and log in as the player there. Horizon's registry review found
+exactly that. Online-mode servers therefore refuse the connection, as they do
+for any client that cannot authenticate.
 
 Signed chat works too: from Horizon's Nightly 2026-11-01 on, the client holds
 a chat key pair and signs its messages, so online-mode servers with
@@ -34,7 +41,7 @@ not the proxy's.
 | Reads the server's protocol from its status ping | `route()` in `engine.rs` |
 | Reuses a running proxy or starts one (finds a free port, waits for it to listen) | `ensure_proxy()` |
 | Rewrites the join's address to `127.0.0.1:<port>` | `route.rs`, a `MODIFY_ARG` hook on `Session::connect` / `Session::connect_transferred` |
-| Answers ViaProxy's `oam:join` login query with the player's own account | `proto.rs` + a `RETURN` hook on `Connection::recv` and a `MODIFY_ARG` hook on `Connection::send` |
+| Shows a joinable server as compatible in the server list | `ping.rs`, a cancellable `HEAD` on `net::ping`, with `decisions.rs`
 | Stops the proxy when the player leaves | `session_end.rs`, a `HEAD` hook on `Session::disconnect` |
 | Kills proxies a crash left behind | `reap_once()`, a pid file in the mod's data folder |
 
@@ -78,10 +85,9 @@ Minecraft server, you were going to run a JVM anyway.
 
 ## Requirements
 
-- Horizon 26.3 (Nightly 2026-10-30 or anything whose source contains the pinned
-  commit).
-- Java 17+ — or nothing, in which case Mojang's runtime is downloaded on demand
-  (about 180 MB, once).
+- Horizon 26.3 (the pinned commit, `07b7ea3`).
+- Java 17+: an installed one, or the runtime the launcher keeps under
+  `<game home>/runtime/`. Nothing is downloaded.
 - Internet the first time: ViaProxy is about 49 MB.
 
 ## Installing
@@ -133,13 +139,14 @@ cargo test --workspace --locked --offline        # the protocol logic (5 tests)
 python3 tools/horizon.py check                   # the bundle compiles into Horizon
 python3 tools/horizon.py build                   # a game binary to run
 python3 tools/horizon.py test                    # the mod's tests inside the game
-python3 tools/package.py                         # target/crossversion-<version>.hnmod
+# the registry artifact comes from the registry repo's own tool:
+#   python3 native/tools/native.py package crossversion   (in a horizon-mods clone)
 ```
 
-The two modules are injected into the game: `proto.rs` into
-`crates/horizon-protocol/src/lib.rs` and `engine.rs` into
-`crates/horizon-client/src/net.rs`. The hook adapters are `route.rs`,
-`oam_recv.rs`, `oam_send.rs` and `session_end.rs`.
+The modules are injected into the game: `decisions.rs` and `engine.rs` into
+`crates/horizon-client/src/net.rs`, and `ui.rs` into
+`crates/horizon-client/src/game/mods.rs`. The hook adapters are `route.rs`,
+`ping.rs`, `ui_mods.rs`, `ui_settings.rs`, `ui_click.rs` and `session_end.rs`.
 
 ![Cross-version](icon.png)
 

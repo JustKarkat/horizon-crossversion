@@ -28,11 +28,11 @@ A build from `tools/horizon.py build` was run offscreen and joined through
 | Vanilla 26.3 (the client's own version) | No routing at all: no `[crossversion]` line, no JVM started |
 | Vanilla 1.20.1, `online-mode=true`, port 25584, fixed answer (`HORIZON_CROSSVERSION_AUTH=ok`) | ViaProxy's `oam:join` query was answered and the proxy went on to log in; the server refused it with "invalid session" because the answer was a fixed `true`, not a Mojang join. Shows the answer reaches the proxy intact |
 | Vanilla 1.20.1, `online-mode=true`, port 25584, **real account** | **Joined, authenticated as the signed-in account**: the server logged `UUID of player JustKarkat is 5166e6e4-…`, `JustKarkat[…] logged in`, `JustKarkat joined the game`; the client had 201 chunks. The session came from `horizon-launcher play --arg --help`, which writes the session file and exits before the game reads it |
-| Vanilla 1.20.1, `online-mode=true`, port 25584, **signed chat** | `<JustKarkat> signed chat through the proxy` in the server log — no `[Not Secure]` prefix, so the server verified the signature the client made |
+| Vanilla 1.20.1, `online-mode=true`, port 25584 | **No longer supported (0.5.0).** The registry review found that answering ViaProxy's `oam:join` query means signing any hash a joined server can inject; the mod now starts ViaProxy with `--auth-method NONE` and never calls `join_server`, so online-mode servers refuse the join |
 | Vanilla 1.21.1, port 25582, chat | `[Not Secure] <Tester7> hello 1.21.1` (offline server, no profile key possible — correct) |
 | Vanilla 26.3, `online-mode=true`, port 25585, direct (no proxy) | No proxy started (0 routing lines); `<JustKarkat> 26.3 secure chat after the update` — signed chat works against a same-version server too |
 | First run with no cached jar | ViaProxy 3.4.14 downloaded (49 MB), SHA-256 verified, joined |
-| No Java on the machine (`HORIZON_CROSSVERSION_INSTALL_JAVA=1`) | Mojang's `java-runtime-delta` (Java 21, 423 files) installed into `<game home>/runtime/`, then joined through it |
+| No Java on the machine | **No longer downloads (0.5.0):** it reports that Java 17+ is needed and does not start the proxy. An existing runtime under `<game home>/runtime/` (including `jre.bundle/Contents/Home`) is used |
 | Leaving the server | The proxy process is gone and `proxies.json` is empty |
 
 ## Server list

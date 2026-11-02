@@ -43,10 +43,15 @@ pub fn click(mod_id: &str, button: usize) {
     match button {
         0 => {
             let on = horizon_client::net::crossversion::toggle_enabled();
-            eprintln!("[crossversion] {} from the settings page", if on { "on" } else { "off" });
+            eprintln!(
+                "[crossversion] {} from the settings page",
+                if on { "on" } else { "off" }
+            );
         }
         1 => match horizon_client::net::crossversion::clear_downloads() {
-            Ok(()) => eprintln!("[crossversion] downloaded ViaProxy deleted; the next join fetches it"),
+            Ok(()) => {
+                eprintln!("[crossversion] downloaded ViaProxy deleted; the next join fetches it")
+            }
             Err(error) => eprintln!("[crossversion] could not delete it: {error}"),
         },
         _ => {}

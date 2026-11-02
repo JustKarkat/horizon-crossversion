@@ -23,20 +23,7 @@ use sha2::{Digest, Sha256};
 /// ViaProxy, GPL-3.0: downloaded, never embedded
 /// (https://github.com/ViaVersion/ViaProxy).
 const VIAPROXY_VERSION: &str = "3.4.14";
-const VIAPROXY_SHA256: &str =
-    "2894bbfb2f4342f8fde887af6c689313efd5b0e46a8006775eea0e21e2948ab5";
-/// The OpenAuthMod plugin, GPL-3.0: lets the player's own account log in to
-/// online-mode servers through the proxy.
-const OPENAUTHMOD_VERSION: &str = "1.0.2";
-const OPENAUTHMOD_SHA256: &str =
-    "95085aac381ae92fc45d476732958b826254be4fbe2876f2d8b619b2373898fe";
-
-/// Mojang's Java runtimes, as the launcher downloads them.
-const JAVA_RUNTIMES: &str =
-    "https://launchermeta.mojang.com/v1/products/java-runtime/2ec0cc96c44e5a76b9c8b7c39df7210883d12871/all.json";
-/// The runtime installed when no usable Java is on the machine.
-const JAVA_COMPONENT: &str = "java-runtime-delta";
-const JAVA_MAJOR: u32 = 21;
+const VIAPROXY_SHA256: &str = "2894bbfb2f4342f8fde887af6c689313efd5b0e46a8006775eea0e21e2948ab5";
 /// ViaProxy needs Java 17 or newer.
 const JAVA_MINIMUM: u32 = 17;
 
@@ -98,7 +85,10 @@ fn config() -> Config {
             return defaults;
         };
         let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
-            eprintln!("[crossversion] {} is not JSON; using defaults", path.display());
+            eprintln!(
+                "[crossversion] {} is not JSON; using defaults",
+                path.display()
+            );
             return defaults;
         };
         // An environment override is for experiments and wins over the file.
@@ -110,7 +100,9 @@ fn config() -> Config {
                 json["enabled"].as_bool().unwrap_or(defaults.enabled)
             },
             always: json["always"].as_bool().unwrap_or(defaults.always) || defaults.always,
-            java: defaults.java.or_else(|| json["java"].as_str().map(PathBuf::from)),
+            java: defaults
+                .java
+                .or_else(|| json["java"].as_str().map(PathBuf::from)),
             servers: json["servers"]
                 .as_object()
                 .map(|servers| {
@@ -152,7 +144,6 @@ pub fn route(address: &str) -> Option<String> {
     // so it must not be routed again, and its login still needs the account.
     if let Some(port) = our_port(address) {
         hold(port);
-        arm_auth();
         return None;
     }
     let settings = config();
@@ -179,7 +170,6 @@ pub fn route(address: &str) -> Option<String> {
     let translated = forced.is_some()
         || protocol.is_some_and(|protocol| protocol != horizon_protocol::PROTOCOL_VERSION);
     if !translated && !settings.always {
-        horizon_protocol::crossversion::disarm();
         return None;
     }
 
@@ -195,7 +185,6 @@ pub fn route(address: &str) -> Option<String> {
     match ensure_proxy(address, &settings, forced.as_deref()) {
         Ok(port) => {
             hold(port);
-            arm_auth();
             Some(format!("127.0.0.1:{port}"))
         }
         Err(error) => {
@@ -212,37 +201,10 @@ fn ping_protocol(address: &str) -> Option<i32> {
     i32::try_from(json["version"]["protocol"].as_i64()?).ok()
 }
 
-/// ViaProxy asks the client to authenticate the target server's session hash
-/// (`oam:join`); the client holds the player's token, so it signs it.
-fn arm_auth() {
-    // Testing hook: answer every challenge with a fixed result instead of the
-    // signed-in account (HORIZON_CROSSVERSION_AUTH=ok|fail).
-    if let Some(mode) = std::env::var_os("HORIZON_CROSSVERSION_AUTH") {
-        let ok = mode == "ok";
-        eprintln!("[crossversion] debug authenticator answers {ok}");
-        horizon_protocol::crossversion::arm(Box::new(move |_| ok));
-        return;
-    }
-    let Some(session) = crate::auth::current() else {
-        eprintln!("[crossversion] no account signed in: online-mode servers will refuse the client");
-        return;
-    };
-    horizon_protocol::crossversion::arm(Box::new(move |hash| {
-        match crate::auth::join_server(&session, hash) {
-            Ok(()) => true,
-            Err(error) => {
-                eprintln!("[crossversion] joining the server's session failed: {error:?}");
-                false
-            }
-        }
-    }));
-}
-
 /// A session ended. A transfer ends one session and starts the next on the
 /// same proxy within a second, so the proxy is stopped only once nothing has
 /// used it for a few seconds.
 pub fn session_ended(address: &str) {
-    horizon_protocol::crossversion::disarm();
     if let Some(port) = our_port(address) {
         release(port);
     }
@@ -368,7 +330,9 @@ fn spawn(
         .args(["--bind-address", &format!("127.0.0.1:{port}")])
         .args(["--target-address", target])
         .args(["--target-version", version.unwrap_or("auto")])
-        .args(["--auth-method", "OPENAUTHMOD"])
+        // Offline-mode only: the client never signs a session hash, so a server
+        // cannot have it sign one for somewhere else.
+        .args(["--auth-method", "NONE"])
         .current_dir(jar.parent().unwrap_or(Path::new(".")))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -393,7 +357,9 @@ fn spawn(
         }
         if let Ok(Some(status)) = child.try_wait() {
             let tail = errors.lock().unwrap_or_else(|e| e.into_inner()).join("\n");
-            return Err(format!("ViaProxy stopped during startup ({status})\n{tail}"));
+            return Err(format!(
+                "ViaProxy stopped during startup ({status})\n{tail}"
+            ));
         }
         std::thread::sleep(Duration::from_millis(100));
     }
@@ -445,23 +411,13 @@ fn drain(mut pipe: impl Read + Send + 'static, keep: Option<Arc<Mutex<Vec<String
 fn ensure_assets() -> Result<PathBuf, String> {
     let folder = data_dir().join("viaproxy");
     let jar = folder.join(format!("ViaProxy-{VIAPROXY_VERSION}.jar"));
-    let plugin = folder
-        .join("plugins")
-        .join(format!("ViaProxyOpenAuthMod-{OPENAUTHMOD_VERSION}.jar"));
-    fs::create_dir_all(folder.join("plugins")).map_err(|e| format!("{}: {e}", folder.display()))?;
+    fs::create_dir_all(&folder).map_err(|e| format!("{}: {e}", folder.display()))?;
     fetch(
         &format!(
             "https://github.com/ViaVersion/ViaProxy/releases/download/v{VIAPROXY_VERSION}/ViaProxy-{VIAPROXY_VERSION}.jar"
         ),
         &jar,
         VIAPROXY_SHA256,
-    )?;
-    fetch(
-        &format!(
-            "https://github.com/ViaVersionAddons/ViaProxyOpenAuthMod/releases/download/v{OPENAUTHMOD_VERSION}/ViaProxyOpenAuthMod-{OPENAUTHMOD_VERSION}.jar"
-        ),
-        &plugin,
-        OPENAUTHMOD_SHA256,
     )?;
     Ok(jar)
 }
@@ -521,24 +477,27 @@ fn digest(path: &Path) -> Result<String, String> {
 
 // ---- Java ----
 
-/// A Java 17+ to run the proxy with, installed from Mojang if this machine has
-/// none.
+/// A Java 17+ to run the proxy with: the one named in the config, a runtime the
+/// launcher already keeps under the game home, or one installed on the machine.
+/// Nothing is downloaded: a machine without Java says so.
 fn find_java(settings: &Config) -> Result<PathBuf, String> {
     if let Some(java) = &settings.java {
         return if java.is_file() {
             Ok(java.clone())
         } else {
-            Err(format!("config names {}, which is not there", java.display()))
+            Err(format!(
+                "config names {}, which is not there",
+                java.display()
+            ))
         };
     }
-    // Testing hook: skip every Java on the machine and install Mojang's.
-    if std::env::var_os("HORIZON_CROSSVERSION_INSTALL_JAVA").is_none() {
-        if let Some(java) = installed_java() {
-            return Ok(java);
-        }
+    if let Some(java) = installed_java() {
+        return Ok(java);
     }
-    eprintln!("[crossversion] no Java {JAVA_MINIMUM}+ found; installing Mojang's Java {JAVA_MAJOR}");
-    install_java()
+    Err(format!(
+        "no Java {JAVA_MINIMUM}+ found. Install one, or point \"java\" in \
+         horizon-mods/.horizon-mod-data/crossversion/config.json at it"
+    ))
 }
 
 fn java_program(home: &Path) -> PathBuf {
@@ -546,9 +505,31 @@ fn java_program(home: &Path) -> PathBuf {
         .join(if cfg!(windows) { "javaw.exe" } else { "java" })
 }
 
-/// The first Java home at or above `JAVA_MINIMUM` we can find.
+/// The first Java home at or above `JAVA_MINIMUM` this machine has.
 fn installed_java() -> Option<PathBuf> {
     let mut homes: Vec<PathBuf> = Vec::new();
+    // What Horizon itself uses, beside the game: <game home>/runtime follows
+    // the official launcher's <component>/<platform>/<component> layout, which
+    // macOS fills with a jre.bundle.
+    let runtime = crate::logging::game_home().join("runtime");
+    for component in std::fs::read_dir(&runtime).into_iter().flatten().flatten() {
+        for platform in std::fs::read_dir(component.path())
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            for home in std::fs::read_dir(platform.path())
+                .into_iter()
+                .flatten()
+                .flatten()
+            {
+                let home = home.path();
+                homes.push(home.join("Contents").join("Home"));
+                homes.push(home.join("jre.bundle").join("Contents").join("Home"));
+                homes.push(home);
+            }
+        }
+    }
     if let Some(home) = std::env::var_os("JAVA_HOME") {
         homes.push(PathBuf::from(home));
     }
@@ -560,11 +541,10 @@ fn installed_java() -> Option<PathBuf> {
         }
     }
     for parent in java_parents() {
-        if let Ok(entries) = fs::read_dir(&parent) {
+        if let Ok(entries) = std::fs::read_dir(&parent) {
             for entry in entries.flatten() {
-                homes.push(entry.path());
-                // macOS bundles keep the runtime under Contents/Home.
                 homes.push(entry.path().join("Contents").join("Home"));
+                homes.push(entry.path());
             }
         }
     }
@@ -589,7 +569,11 @@ fn java_parents() -> Vec<PathBuf> {
         let home = PathBuf::from(home);
         parents.push(home.join(".jdks"));
         parents.push(home.join(".sdkman").join("candidates").join("java"));
-        parents.push(home.join("Library").join("Java").join("JavaVirtualMachines"));
+        parents.push(
+            home.join("Library")
+                .join("Java")
+                .join("JavaVirtualMachines"),
+        );
     }
     if let Some(program) = std::env::var_os("ProgramFiles") {
         let program = PathBuf::from(program);
@@ -616,169 +600,11 @@ fn release_major(home: &Path) -> Option<u32> {
     }
 }
 
-/// Installs Mojang's runtime (the files the official launcher uses) into
-/// `<game home>/runtime/` so every instance shares it.
-fn install_java() -> Result<PathBuf, String> {
-    let platform = java_platform().ok_or("Mojang has no Java for this system")?;
-    let runtime = crate::logging::game_home().join("runtime");
-    let home = runtime
-        .join(JAVA_COMPONENT)
-        .join(platform)
-        .join(JAVA_COMPONENT);
-    if release_major(&home).is_some_and(|major| major >= JAVA_MINIMUM)
-        && java_program(&home).is_file()
-    {
-        return Ok(java_program(&home));
-    }
-
-    let agent = agent();
-    let index_text = agent
-        .get(JAVA_RUNTIMES)
-        .call()
-        .map_err(|e| format!("Mojang's Java index: {e}"))?
-        .into_string()
-        .map_err(|e| format!("Mojang's Java index: {e}"))?;
-    let index: serde_json::Value =
-        serde_json::from_str(&index_text).map_err(|e| format!("Mojang's Java index: {e}"))?;
-    let entry = &index[platform][JAVA_COMPONENT][0];
-    if entry.is_null() {
-        return Err(format!("Mojang has no {JAVA_COMPONENT} for {platform}"));
-    }
-    let manifest_url = entry["manifest"]["url"]
-        .as_str()
-        .ok_or("Mojang's Java index has no manifest")?;
-    let manifest_sha1 = entry["manifest"]["sha1"]
-        .as_str()
-        .ok_or("Mojang's Java index has no manifest sha1")?;
-    // The manifest itself is sha1-checked.
-    let manifest_bytes = fetch_bytes(&agent, manifest_url)?;
-    if fingerprint(&manifest_bytes) != manifest_sha1 {
-        return Err(format!("Mojang's {JAVA_COMPONENT} manifest is not the one it signed"));
-    }
-    let manifest: serde_json::Value = serde_json::from_slice(&manifest_bytes)
-        .map_err(|e| format!("Mojang's {JAVA_COMPONENT} manifest: {e}"))?;
-    let files = manifest["files"]
-        .as_object()
-        .ok_or_else(|| format!("Mojang's {JAVA_COMPONENT} manifest lists no files"))?;
-
-    fs::create_dir_all(&home).map_err(|e| format!("{}: {e}", home.display()))?;
-    eprintln!(
-        "[crossversion] installing Minecraft's Java ({} files) into {}",
-        files.len(),
-        home.display()
-    );
-    for (name, file) in files {
-        let Some(path) = safe_path(&home, name) else {
-            return Err(format!("unsafe path {name:?} in Mojang's Java"));
-        };
-        match file["type"].as_str() {
-            Some("directory") => {
-                fs::create_dir_all(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-            }
-            Some("file") => {
-                let url = file["downloads"]["raw"]["url"]
-                    .as_str()
-                    .ok_or_else(|| format!("{name}: no download url"))?;
-                let sha1 = file["downloads"]["raw"]["sha1"]
-                    .as_str()
-                    .ok_or_else(|| format!("{name}: no download sha1"))?;
-                let bytes = fetch_bytes(&agent, url)?;
-                if fingerprint(&bytes) != sha1 {
-                    return Err(format!("{name}: download does not match its sha1"));
-                }
-                if let Some(parent) = path.parent() {
-                    fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
-                }
-                fs::write(&path, &bytes).map_err(|e| format!("{}: {e}", path.display()))?;
-                if file["executable"] == true {
-                    make_executable(&path)?;
-                }
-            }
-            Some("link") => {
-                let target = file["target"]
-                    .as_str()
-                    .ok_or_else(|| format!("{name}: no link target"))?;
-                if let Some(parent) = path.parent() {
-                    fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
-                }
-                let _ = fs::remove_file(&path);
-                #[cfg(unix)]
-                let _ = std::os::unix::fs::symlink(target, &path);
-                #[cfg(windows)]
-                let _ = std::os::windows::fs::symlink_file(target, &path);
-            }
-            _ => {}
-        }
-    }
-    if !java_program(&home).is_file() {
-        return Err(format!("Mojang's Java has no java in {}", home.display()));
-    }
-    Ok(java_program(&home))
-}
-
-fn fetch_bytes(agent: &ureq::Agent, url: &str) -> Result<Vec<u8>, String> {
-    let mut bytes = Vec::new();
-    agent
-        .get(url)
-        .call()
-        .map_err(|e| format!("{url}: {e}"))?
-        .into_reader()
-        .take(DOWNLOAD_LIMIT)
-        .read_to_end(&mut bytes)
-        .map_err(|e| format!("{url}: {e}"))?;
-    Ok(bytes)
-}
-
-fn fingerprint(bytes: &[u8]) -> String {
-    use sha1::Digest as _;
-    format!("{:x}", sha1::Sha1::digest(bytes))
-}
-
-/// A manifest path joined under `root`, refused if it could leave it.
-fn safe_path(root: &Path, name: &str) -> Option<PathBuf> {
-    if name.contains('\\') {
-        return None;
-    }
-    let mut path = root.to_owned();
-    for part in name.split('/') {
-        if part.is_empty() || part == "." || part == ".." {
-            return None;
-        }
-        path.push(part);
-    }
-    Some(path)
-}
-
-fn make_executable(path: &Path) -> Result<(), String> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o755))
-            .map_err(|e| format!("{}: {e}", path.display()))?;
-    }
-    #[cfg(windows)]
-    let _ = path;
-    Ok(())
-}
-
-fn java_platform() -> Option<&'static str> {
-    Some(match (std::env::consts::OS, std::env::consts::ARCH) {
-        ("macos", "aarch64") => "mac-os-arm64",
-        ("macos", "x86_64") => "mac-os",
-        ("linux", "x86_64") => "linux",
-        ("linux", "x86") => "linux-i386",
-        ("windows", "x86_64") => "windows-x64",
-        ("windows", "aarch64") => "windows-arm64",
-        ("windows", "x86") => "windows-x86",
-        _ => return None,
-    })
-}
-
 // ---- Settings ----
 
 /// The mod's own version, shown in Options > Mods. Keep in step with
 /// `horizon-mixin.toml`.
-pub const VERSION: &str = "0.4.0";
+pub const VERSION: &str = "0.5.0";
 
 /// What the settings page shows.
 pub fn summary() -> (bool, String, String) {
@@ -844,7 +670,10 @@ pub fn ping_head(
         return ControlFlow::Continue(());
     }
     match status_query(address) {
-        Some((json, ms)) => ControlFlow::Break(Ok((badge(json, address), ms))),
+        Some((json, ms)) => ControlFlow::Break(Ok((
+            crate::net::crossversion_decisions::badge(json, address),
+            ms,
+        ))),
         None => ControlFlow::Continue(()),
     }
 }
@@ -857,9 +686,11 @@ fn status_query(address: &str) -> Option<(serde_json::Value, u128)> {
         packets::{Empty, handshake, status},
     };
     let (host, port) = horizon_protocol::servers::parse_address(address)?;
-    let mut connection =
-        Connection::connect_server(&host, port, PING_TIMEOUT).ok()?;
-    connection.reader.set_read_timeout(Some(PING_TIMEOUT)).ok()?;
+    let mut connection = Connection::connect_server(&host, port, PING_TIMEOUT).ok()?;
+    connection
+        .reader
+        .set_read_timeout(Some(PING_TIMEOUT))
+        .ok()?;
     let intention = handshake::Serverbound::Intention(handshake::Intention {
         protocol: horizon_protocol::PROTOCOL_VERSION,
         host: host.clone(),
@@ -885,28 +716,6 @@ fn status_query(address: &str) -> Option<(serde_json::Value, u128)> {
     Some((json, started.elapsed().as_millis()))
 }
 
-/// A status that is not this game's version, dressed as one.
-fn badge(mut json: serde_json::Value, address: &str) -> serde_json::Value {
-    let protocol = json["version"]["protocol"].as_i64().unwrap_or(0);
-    // A legacy answer with no version, or this game's own: leave it alone.
-    if protocol == 0 || protocol == i64::from(horizon_protocol::PROTOCOL_VERSION) {
-        return json;
-    }
-    let name = json["version"]["name"].as_str().unwrap_or("?").to_owned();
-    eprintln!("[crossversion] {address} speaks {name}; the list shows it as joinable");
-    let badge = serde_json::json!({
-        "text": format!("{name} · via ViaProxy\n"),
-        "color": "green",
-    });
-    let description = json
-        .get("description")
-        .cloned()
-        .unwrap_or(serde_json::Value::Null);
-    json["description"] = serde_json::Value::Array(vec![badge, description]);
-    json["version"]["protocol"] = serde_json::json!(horizon_protocol::PROTOCOL_VERSION);
-    json
-}
-
 // ---- Leftover proxies ----
 
 /// A proxy outlives a crash, so each start kills the ones a previous run left.
@@ -926,7 +735,10 @@ fn reap_once() {
     };
     let mut killed = 0;
     for entry in json.as_array().into_iter().flatten() {
-        let Some(pid) = entry["pid"].as_u64().and_then(|pid| u32::try_from(pid).ok()) else {
+        let Some(pid) = entry["pid"]
+            .as_u64()
+            .and_then(|pid| u32::try_from(pid).ok())
+        else {
             continue;
         };
         if is_our_java(pid) {
@@ -1002,46 +814,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn manifest_paths_stay_inside() {
-        let root = Path::new("/rt");
-        assert_eq!(
-            safe_path(root, "bin/java"),
-            Some(root.join("bin").join("java"))
-        );
-        assert_eq!(safe_path(root, "legal/x"), Some(root.join("legal").join("x")));
-        assert_eq!(safe_path(root, "../escape"), None);
-        assert_eq!(safe_path(root, "bin/../../escape"), None);
-        assert_eq!(safe_path(root, "/abs"), None);
-        assert_eq!(safe_path(root, "a\\b"), None);
-    }
-
-    #[test]
-    fn a_joinable_server_is_badged_green() {
-        let json = serde_json::json!({
-            "version": {"name": "1.20.1", "protocol": 763},
-            "description": {"text": "A server"},
-        });
-        let out = badge(json, "example.test");
-        assert_eq!(out["version"]["protocol"], 777);
-        let lines = out["description"].as_array().unwrap();
-        assert_eq!(lines[0]["text"], "1.20.1 · via ViaProxy\n");
-        assert_eq!(lines[0]["color"], "green");
-        assert_eq!(lines[1]["text"], "A server");
-    }
-
-    #[test]
-    fn the_badge_leaves_this_version_alone() {
-        let json = serde_json::json!({
-            "version": {"name": "26.3", "protocol": 777},
-            "description": "hi",
-        });
-        assert_eq!(badge(json.clone(), "example.test"), json);
-    }
-
-    #[test]
-    fn platform_names_match_mojang() {
-        if let Some(platform) = java_platform() {
-            assert!(platform.contains('-') || platform == "linux");
-        }
+    fn a_java_home_needs_a_release_file() {
+        assert_eq!(release_major(Path::new("/nonexistent")), None);
     }
 }
