@@ -1,4 +1,30 @@
-// Cross-version support (horizon-crossversion): the proxy manager.
+// MIT License
+//
+// Copyright (c) 2026 Horizon Veinminer contributors
+// Copyright (c) 2026 Horizon native mod contributors
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+//
+// This file is part of the horizon-crossversion bundle: the MIT notice above
+// ships with it, so every copy of the .hnmod carries the licence.
+
+// The proxy manager.
 //
 // Injected into `crates/horizon-client/src/net.rs` by horizon-mixins and
 // compiled into the client library, so it can reach the game's own ping,
@@ -755,7 +781,7 @@ fn device_code(line: &str) -> Option<String> {
 
 /// The mod's own version, shown in Options > Mods. Keep in step with
 /// `horizon-mixin.toml`.
-pub const VERSION: &str = "0.7.0";
+pub const VERSION: &str = "0.7.1";
 
 /// What the settings page shows.
 /// What the version switch needs to know: whether the mod is on at all.
@@ -838,13 +864,28 @@ pub fn cycle_server_version(address: &str) -> String {
 }
 
 /// Drop the downloaded ViaProxy so the next join fetches it again.
+/// Delete the downloaded jars, and nothing else: the account and its refresh
+/// token in `saves.json`, and the proxy's own settings, stay.
 pub fn clear_downloads() -> Result<(), String> {
     let folder = data_dir().join("viaproxy");
-    match fs::remove_dir_all(&folder) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(format!("{}: {error}", folder.display())),
+    let mut removed = 0;
+    for dir in [folder.clone(), folder.join("plugins")] {
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.ends_with(".jar") {
+                fs::remove_file(entry.path())
+                    .map_err(|error| format!("{}: {error}", entry.path().display()))?;
+                removed += 1;
+            }
+        }
     }
+    if removed == 0 {
+        return Err("nothing downloaded yet".to_owned());
+    }
+    Ok(())
 }
 
 // ---- Server list ----

@@ -55,6 +55,15 @@ The tooltip on the badge was not done: the mixin tool refuses `RETURN` hooks in
 functions containing `?` or closures, and both `ping_tooltip` and the list
 drawing code contain them. The badge text carries the explanation instead.
 
+## Registry review of 0.7.0 (0.7.1)
+
+| Finding | Fix |
+|---|---|
+| The `.hnmod` carried no MIT notice | The licence text is now the header of `mixins/crossversion/engine.rs`, which the bundle ships; `unzip -p crossversion-0.7.1.hnmod mixins/crossversion/engine.rs` starts with it |
+| "Delete the downloaded ViaProxy" removed `saves.json` too, and with it the account | `clear_downloads()` now deletes only `*.jar` (and the plugin jars); the account, refresh token and proxy settings stay |
+
+Run on a scratch game folder holding `saves.json` with an account, `ViaProxy-3.4.14.jar`, `plugins/SomePlugin.jar` and `viaversion.yml`: after the click, the two jars are gone, `saves.json` and `viaversion.yml` remain, and the log says `downloaded ViaProxy deleted; the next join fetches it`. The 0.7.0 build on the same folder removed the whole directory, which is what the review found.
+
 ## Version switch (0.7.0)
 
 A windowed build, driven with `horizon-ctl`, on the player's own server list:

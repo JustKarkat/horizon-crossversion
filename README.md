@@ -113,6 +113,9 @@ The mod is native code compiled into Horizon, so the launcher builds it:
 horizon-launcher native-build path/to/crossversion-0.1.0.hnmod --trust-native-code
 ```
 
+The settings page's "Delete the downloaded ViaProxy" removes the jars only: the
+account added to ViaProxy and its refresh token in `saves.json` stay.
+
 Settings live in `horizon-mods/.horizon-mod-data/crossversion/config.json`:
 
 ```json
