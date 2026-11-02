@@ -48,6 +48,18 @@ not the proxy's.
 | Stops the proxy when the player leaves | `session_end.rs`, a `HEAD` hook on `Session::disconnect` |
 | Kills proxies a crash left behind | `reap_once()`, a pid file in the mod's data folder |
 
+### Choosing the version
+
+**Edit Server** and **Direct Connect** draw one extra line under their buttons:
+`ViaProxy asks the server its version (click to choose)`. Clicking it steps
+through `auto`, `1.8`, `1.9`, `1.12.2`, `1.16.5`, `1.20.1`, `1.21.1`, `1.21.4`
+and `26.3` for that address, and keeps the choice in the config's `servers`
+map. It is the version ViaProxy tells the server it is, which is what a server
+whose status reports the wrong version needs — that is the address in front of
+the colon in the status, not the client: Horizon always speaks 26.3 to the
+proxy, and pretending otherwise would only make the translation wrong. The line
+is green when a version is chosen and grey when it is `auto`.
+
 ### The server list
 
 A server whose status says it speaks another version is listed as joinable

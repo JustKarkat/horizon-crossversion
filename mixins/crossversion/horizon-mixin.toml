@@ -1,6 +1,6 @@
 [mod]
 id = "crossversion"
-version = "0.6.0"
+version = "0.7.0"
 priority = 100
 
 [compatibility]
@@ -13,6 +13,13 @@ id = "decisions"
 file = "crates/horizon-client/src/net.rs"
 name = "crossversion_decisions"
 source = "decisions.rs"
+
+# Edit Server and Direct Connect: which version ViaProxy tells the server it is.
+[[module]]
+id = "switch"
+file = "crates/horizon-client/src/multiplayer.rs"
+name = "crossversion_switch"
+source = "switch.rs"
 
 # Options > Mods: the row and its settings page.
 [[module]]
@@ -96,4 +103,30 @@ helper = "ui_click.rs"
 bindings = [
   { name = "mod_id", ty = "&str", value = "mod_id" },
   { name = "button", ty = "usize", value = "button" },
+]
+
+# The switch is drawn after the screen (draw_tooltip runs last) ...
+[[injection]]
+id = "switch-draw"
+target = "horizon_client::multiplayer::Screen::draw_tooltip"
+kind = "HEAD"
+helper = "switch_draw.rs"
+bindings = [
+  { name = "screen", ty = "&Screen", value = "self" },
+  { name = "atlas", ty = "&HudAtlas", value = "atlas" },
+  { name = "batch", ty = "&mut HudBatch", value = "batch" },
+]
+
+# ... and a click on it changes the version instead of reaching the screen.
+[[injection]]
+id = "switch-click"
+target = "horizon_client::multiplayer::Screen::click"
+kind = "HEAD"
+cancellable = true
+helper = "switch_click.rs"
+bindings = [
+  { name = "screen", ty = "&mut Screen", value = "&mut *self" },
+  { name = "x", ty = "f32", value = "x" },
+  { name = "y", ty = "f32", value = "y" },
+  { name = "size", ty = "(f32, f32)", value = "size" },
 ]

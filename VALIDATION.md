@@ -55,6 +55,19 @@ The tooltip on the badge was not done: the mixin tool refuses `RETURN` hooks in
 functions containing `?` or closures, and both `ping_tooltip` and the list
 drawing code contain them. The badge text carries the explanation instead.
 
+## Version switch (0.7.0)
+
+A windowed build, driven with `horizon-ctl`, on the player's own server list:
+
+| Check | Result |
+|---|---|
+| Direct Connect | `ViaProxy asks the server its version (click to choose)` drawn under Cancel, in grey |
+| Add Server (the Edit screen's fields) | the same line, under Cancel |
+| A click on it | `[crossversion] mcjungle.xyz: ViaProxy now acts as 1.8 to this server`, the line turns green and reads `ViaProxy acts as 1.8 to this server (click to change)`, and `config.json` gains `"servers": {"mcjungle.xyz": "1.8"}` |
+
+A click has to be in GUI pixels (`horizon-ctl click-at` takes those, as `screen`
+reports them); the window was 1280x720 at a GUI of 427x240.
+
 ## Account sign-in (0.6.0)
 
 Options > Mods > Cross-version > Settings asks ViaProxy's console for a

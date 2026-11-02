@@ -1,13 +1,15 @@
 id = "crossversion"
 kind = "native-mod"
 name = "Cross-version"
-summary = "Join servers on older Minecraft versions: reads the version, runs ViaProxy locally, and logs in with an account added to the proxy."
+summary = "Join servers on older Minecraft versions: picks the version per server, runs ViaProxy locally, and logs in with an account added to the proxy."
 description = """
 Horizon speaks one protocol, 26.3 (777). This mod lets it join servers that speak an older one.
 
 On a join, it reads the server's version from its status reply. If it is not 26.3, it starts ViaProxy on a loopback port and points the join at it; ViaProxy speaks 26.3 to Horizon and the server's own version to the server. A join to a 26.3 server is never routed, and nothing else about the client changes.
 
 The server list shows what ViaProxy can join: a server whose status says another version keeps its ping bars green and shows its version in green above the MOTD ("PaperSpigot 1.8.8 · via ViaProxy") instead of the red incompatible cross.
+
+Edit Server and Direct Connect carry a version switch under their buttons: it steps through auto, 1.8, 1.9, 1.12.2, 1.16.5, 1.20.1, 1.21.1, 1.21.4 and 26.3 for that address, and keeps the choice. That is the version ViaProxy tells the server it is, which is what a server whose status reports the wrong version needs; Horizon itself always speaks 26.3 to the proxy.
 
 Online-mode servers work through an account added to ViaProxy. Horizon never signs a session hash: the proxy logs in with the Microsoft account the player adds to it, once, from Options > Mods > Cross-version > Settings, which shows the Microsoft device code. That is deliberate: answering ViaProxy's OpenAuthMod query instead would mean signing any hash that arrives in a login query, and a server the player joins can send one too, so it could have the client sign a hash for a server it runs and log in as the player there (found in review of 0.4.0). The account and its refresh token live in ViaProxy's own save under horizon-mods/.horizon-mod-data/crossversion/viaproxy/, not in Horizon.
 
@@ -28,14 +30,14 @@ source = "https://github.com/JustKarkat/horizon-crossversion"
 key = "RWTcPJHJYjPW0pV3lPwr45crCu0wJxW5HbDLc3fr3Eom1TzxO++kHOo4"
 
 [[versions]]
-version = "0.6.0"
+version = "0.7.0"
 published = "2026-11-01"
 game = "26.3"
-file = "crossversion-0.6.0.hnmod"
-sha256 = "5a164c9a1aa0d43e23f984a7f872d8d76e177c8fdbe047d5a74cb6fdadbe3716"
+file = "crossversion-0.7.0.hnmod"
+sha256 = "281f45baeea2b65b091d5464c57eeba7b3d3be47eaddcbec6acf33975cf7ec40"
 signature = """
 untrusted comment: signature from minisign secret key\r
-RUTcPJHJYjPW0t6eFVPjnhKn0YQXPUgvUmkbjRpxtaE5BH1cIk6QJEGdVUcVkTIw/ddcb6G6/HE/ANfxBYSraXAE6DXdJXML1gw=\r
-trusted comment: timestamp:1793629627	file:crossversion-0.6.0.hnmod	hashed\r
-0FVrgWBhCHfy468OzoUGE+6Vtmjz54v9IGhhGtRq2DPONdg2zsiRrGxqvy+0bYGbdWO4fXeaSTjhtvptVVpgBQ=="""
-changelog = "Online-mode servers again, without the client signing anything: the proxy logs in with a Microsoft account added to it from Options > Mods > Cross-version > Settings, which shows the Microsoft device code. No Mojang runtime is downloaded; an installed Java 17+ or the runtime Horizon already has is used. Old OpenAuthMod plugins left by 0.4.x are removed."
+RUTcPJHJYjPW0sZHADCefonT57e7aWgGLjF1DWTY6wS9TgmVVYfztD8u1sozK/UoTsXdbHjijRvSdmt5HHdowtIi4PFO0CT9EAU=\r
+trusted comment: timestamp:1793647010	file:crossversion-0.7.0.hnmod	hashed\r
+CZX329b7UHVbmCZAgb+Qfo4B1UMGXLH733SnAZh0sgqjrwm1j7uLYI8kHO44qwO0Np1NG1gpvqwzsiuPAMGKDg=="""
+changelog = "A version switch on Edit Server and Direct Connect: choose what version ViaProxy tells that server it is (auto, 1.8, 1.9, 1.12.2, 1.16.5, 1.20.1, 1.21.1, 1.21.4, 26.3), kept per address, for servers whose status reports the wrong version. Online-mode still logs in through the account added to ViaProxy; the client never signs."

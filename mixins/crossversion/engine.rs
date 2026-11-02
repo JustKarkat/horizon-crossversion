@@ -158,7 +158,8 @@ pub fn route(address: &str) -> Option<String> {
         .servers
         .iter()
         .find(|(known, _)| known == address)
-        .map(|(_, version)| version.clone());
+        .map(|(_, version)| version.clone())
+        .filter(|version| version != "auto");
     let protocol = if forced.is_some() {
         None
     } else {
@@ -754,9 +755,14 @@ fn device_code(line: &str) -> Option<String> {
 
 /// The mod's own version, shown in Options > Mods. Keep in step with
 /// `horizon-mixin.toml`.
-pub const VERSION: &str = "0.6.0";
+pub const VERSION: &str = "0.7.0";
 
 /// What the settings page shows.
+/// What the version switch needs to know: whether the mod is on at all.
+pub fn settings_summary() -> (bool, String, String) {
+    summary()
+}
+
 pub fn summary() -> (bool, String, String) {
     let settings = config();
     let enabled = settings.enabled;
@@ -776,7 +782,12 @@ pub fn toggle_enabled() -> bool {
     let mut settings = slot.clone().unwrap_or_else(Config::default);
     settings.enabled = !settings.enabled;
     let enabled = settings.enabled;
-    *slot = Some(settings.clone());
+    write_config(&settings);
+    *slot = Some(settings);
+    enabled
+}
+
+fn write_config(settings: &Config) {
     let path = data_dir().join("config.json");
     let _ = fs::create_dir_all(data_dir());
     let servers: serde_json::Map<String, serde_json::Value> = settings
@@ -785,13 +796,45 @@ pub fn toggle_enabled() -> bool {
         .map(|(address, version)| (address.clone(), serde_json::json!(version)))
         .collect();
     let body = serde_json::json!({
-        "enabled": enabled,
+        "enabled": settings.enabled,
         "always": settings.always,
         "java": settings.java.as_ref().map(|path| path.display().to_string()),
         "servers": servers,
     });
     let _ = fs::write(&path, serde_json::to_vec_pretty(&body).unwrap_or_default());
-    enabled
+}
+
+/// The versions the server-facing switch offers: what ViaProxy tells the
+/// server it speaks. "auto" asks the server (its status) and trusts the answer.
+pub const VERSIONS: &[&str] = &[
+    "auto", "1.8", "1.9", "1.12.2", "1.16.5", "1.20.1", "1.21.1", "1.21.4", "26.3",
+];
+
+/// The version configured for a server, "auto" when it is left to the status.
+pub fn server_version(address: &str) -> String {
+    let settings = config();
+    settings
+        .servers
+        .iter()
+        .find(|(known, _)| known == address)
+        .map(|(_, version)| version.clone())
+        .unwrap_or_else(|| "auto".to_owned())
+}
+
+/// Next version in the list after the one a server has, and keep it.
+pub fn cycle_server_version(address: &str) -> String {
+    let current = server_version(address);
+    let index = VERSIONS.iter().position(|v| *v == current).unwrap_or(0);
+    let next = VERSIONS[(index + 1) % VERSIONS.len()].to_owned();
+    let mut slot = CONFIG.lock().unwrap_or_else(|e| e.into_inner());
+    let mut settings = slot.clone().unwrap_or_else(Config::default);
+    settings.servers.retain(|(known, _)| known != address);
+    if next != "auto" {
+        settings.servers.push((address.to_owned(), next.clone()));
+    }
+    write_config(&settings);
+    *slot = Some(settings);
+    next
 }
 
 /// Drop the downloaded ViaProxy so the next join fetches it again.
