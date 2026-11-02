@@ -16,7 +16,13 @@ Horizon client ──26.3──▶ 127.0.0.1:<port>  ViaProxy  ──server's ve
 
 Tested against a vanilla 1.20.1 server (protocol 763) and a 1.21.1 server
 (767): world load, chunks, entities, chat and the tab list all work. ViaProxy
-itself covers servers from 1.0 to 26.3.
+itself covers servers from 1.0 to 26.3. An **online-mode** 1.20.1 server
+accepts the player's own account through the proxy.
+
+One caveat, and it is Horizon's rather than the proxy's: on servers with
+`enforce-secure-profile=true` (the default for online-mode servers since
+1.19.3) Horizon's chat is disabled, with or without this mod, because the
+client does not hold a player certificate. Commands still work.
 
 ## What it does, precisely
 
