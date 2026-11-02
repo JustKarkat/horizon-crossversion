@@ -141,6 +141,8 @@ The two modules are injected into the game: `proto.rs` into
 `crates/horizon-client/src/net.rs`. The hook adapters are `route.rs`,
 `oam_recv.rs`, `oam_send.rs` and `session_end.rs`.
 
+![Cross-version](icon.png)
+
 ## Licence
 
 The mod is MIT (see [LICENSE](LICENSE)). ViaProxy and ViaProxyOpenAuthMod are

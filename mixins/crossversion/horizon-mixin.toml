@@ -1,6 +1,6 @@
 [mod]
 id = "crossversion"
-version = "0.3.0"
+version = "0.4.0"
 priority = 100
 
 [compatibility]
@@ -16,12 +16,20 @@ name = "crossversion"
 source = "proto.rs"
 visibility = "pub"
 
+# Options > Mods: the row and its settings page.
+[[module]]
+id = "ui"
+file = "crates/horizon-client/src/game/mods.rs"
+name = "crossversion_ui"
+source = "ui.rs"
+
 # The proxy manager: config, Java discovery, ViaProxy download, spawn/reap.
 [[module]]
 id = "engine"
 file = "crates/horizon-client/src/net.rs"
 name = "crossversion"
 source = "engine.rs"
+visibility = "pub"
 
 # A join: rewrite the address to the loopback proxy when the server is not 26.3.
 [[injection]]
@@ -83,3 +91,31 @@ kind = "HEAD"
 cancellable = true
 helper = "ping.rs"
 bindings = [{ name = "address", ty = "&str", value = "address" }]
+
+# Options > Mods: register the row and serve its settings page.
+[[injection]]
+id = "mods-row"
+target = "horizon_client::game::native_hooks::Game<'_>::native_mods"
+kind = "HEAD"
+helper = "ui_mods.rs"
+bindings = [{ name = "mods", ty = "&mut Vec<NativeMod>", value = "mods" }]
+
+[[injection]]
+id = "mods-settings"
+target = "horizon_client::game::native_hooks::Game<'_>::native_settings"
+kind = "HEAD"
+helper = "ui_settings.rs"
+bindings = [
+  { name = "mod_id", ty = "&str", value = "mod_id" },
+  { name = "buttons", ty = "&mut Vec<String>", value = "buttons" },
+]
+
+[[injection]]
+id = "mods-click"
+target = "horizon_client::game::native_hooks::Game<'_>::native_settings_click"
+kind = "HEAD"
+helper = "ui_click.rs"
+bindings = [
+  { name = "mod_id", ty = "&str", value = "mod_id" },
+  { name = "button", ty = "usize", value = "button" },
+]

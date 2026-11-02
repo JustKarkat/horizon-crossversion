@@ -147,6 +147,14 @@ pub fn route(address: &str) -> Option<String> {
     if address.starts_with(crate::net::FRIEND) || address == "local" {
         return None;
     }
+    // A server transfer comes back to this address on purpose (ViaProxy
+    // rewrites the transfer to itself): the connection is already translated,
+    // so it must not be routed again, and its login still needs the account.
+    if let Some(port) = our_port(address) {
+        hold(port);
+        arm_auth();
+        return None;
+    }
     let settings = config();
     if !settings.enabled {
         return None;
@@ -186,6 +194,7 @@ pub fn route(address: &str) -> Option<String> {
     }
     match ensure_proxy(address, &settings, forced.as_deref()) {
         Ok(port) => {
+            hold(port);
             arm_auth();
             Some(format!("127.0.0.1:{port}"))
         }
@@ -229,15 +238,74 @@ fn arm_auth() {
     }));
 }
 
-/// A session ended: the proxy that served it has nothing left to do.
+/// A session ended. A transfer ends one session and starts the next on the
+/// same proxy within a second, so the proxy is stopped only once nothing has
+/// used it for a few seconds.
 pub fn session_ended(address: &str) {
     horizon_protocol::crossversion::disarm();
+    if let Some(port) = our_port(address) {
+        release(port);
+    }
+}
+
+/// Sessions using a proxy port (count) and when it was last handed to one, so
+/// a proxy outlives a transfer whose sessions overlap or arrive out of order.
+static ACTIVE: Mutex<Vec<(u16, usize, Instant)>> = Mutex::new(Vec::new());
+
+/// The port, if `address` is a proxy this mod started.
+fn our_port(address: &str) -> Option<u16> {
     let port = address
         .strip_prefix("127.0.0.1:")
-        .and_then(|port| port.parse::<u16>().ok());
-    let Some(port) = port else {
-        return;
-    };
+        .and_then(|port| port.parse::<u16>().ok())?;
+    let proxies = PROXIES.lock().unwrap_or_else(|e| e.into_inner());
+    proxies
+        .iter()
+        .any(|proxy| proxy.port == port)
+        .then_some(port)
+}
+
+fn hold(port: u16) {
+    let mut active = ACTIVE.lock().unwrap_or_else(|e| e.into_inner());
+    let now = Instant::now();
+    match active.iter_mut().find(|(known, _, _)| *known == port) {
+        Some((_, count, used)) => {
+            *count += 1;
+            *used = now;
+        }
+        None => active.push((port, 1, now)),
+    }
+}
+
+fn release(port: u16) {
+    {
+        let mut active = ACTIVE.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(index) = active.iter().position(|(known, _, _)| *known == port) else {
+            return;
+        };
+        active[index].1 = active[index].1.saturating_sub(1);
+    }
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(5));
+        stop_if_idle(port, 3);
+    });
+}
+
+fn stop_if_idle(port: u16, attempts: u8) {
+    {
+        let active = ACTIVE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((_, count, used)) = active.iter().find(|(known, _, _)| *known == port) {
+            // Someone is on it, or a transfer just picked it up: look again.
+            if *count > 0 || used.elapsed() < Duration::from_secs(5) {
+                if attempts > 0 {
+                    std::thread::spawn(move || {
+                        std::thread::sleep(Duration::from_secs(5));
+                        stop_if_idle(port, attempts - 1);
+                    });
+                }
+                return;
+            }
+        }
+    }
     let mut proxies = PROXIES.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(index) = proxies.iter().position(|proxy| proxy.port == port) {
         stop(proxies.remove(index));
@@ -704,6 +772,60 @@ fn java_platform() -> Option<&'static str> {
         ("windows", "x86") => "windows-x86",
         _ => return None,
     })
+}
+
+// ---- Settings ----
+
+/// The mod's own version, shown in Options > Mods. Keep in step with
+/// `horizon-mixin.toml`.
+pub const VERSION: &str = "0.4.0";
+
+/// What the settings page shows.
+pub fn summary() -> (bool, String, String) {
+    let settings = config();
+    let enabled = settings.enabled;
+    let java = match &settings.java {
+        Some(path) => path.display().to_string(),
+        None => match installed_java() {
+            Some(path) => path.display().to_string(),
+            None => "Mojang's Java, downloaded on first use".to_owned(),
+        },
+    };
+    (enabled, java, VIAPROXY_VERSION.to_owned())
+}
+
+/// Turn the mod on or off from its settings page, and keep it.
+pub fn toggle_enabled() -> bool {
+    let mut slot = CONFIG.lock().unwrap_or_else(|e| e.into_inner());
+    let mut settings = slot.clone().unwrap_or_else(Config::default);
+    settings.enabled = !settings.enabled;
+    let enabled = settings.enabled;
+    *slot = Some(settings.clone());
+    let path = data_dir().join("config.json");
+    let _ = fs::create_dir_all(data_dir());
+    let servers: serde_json::Map<String, serde_json::Value> = settings
+        .servers
+        .iter()
+        .map(|(address, version)| (address.clone(), serde_json::json!(version)))
+        .collect();
+    let body = serde_json::json!({
+        "enabled": enabled,
+        "always": settings.always,
+        "java": settings.java.as_ref().map(|path| path.display().to_string()),
+        "servers": servers,
+    });
+    let _ = fs::write(&path, serde_json::to_vec_pretty(&body).unwrap_or_default());
+    enabled
+}
+
+/// Drop the downloaded ViaProxy so the next join fetches it again.
+pub fn clear_downloads() -> Result<(), String> {
+    let folder = data_dir().join("viaproxy");
+    match fs::remove_dir_all(&folder) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("{}: {error}", folder.display())),
+    }
 }
 
 // ---- Server list ----
