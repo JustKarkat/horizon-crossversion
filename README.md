@@ -143,6 +143,25 @@ The two modules are injected into the game: `proto.rs` into
 
 ![Cross-version](icon.png)
 
+## Signing
+
+Releases are signed with [minisign](https://jedisct1.github.io/minisign/). The
+registry entry (`registry/crossversion.toml`) pins this public key:
+
+```
+RWTcPJHJYjPW0pV3lPwr45crCu0wJxW5HbDLc3fr3Eom1TzxO++kHOo4
+```
+
+Sign a new version before submitting it:
+
+```sh
+minisign -S -s secret-key -m target/crossversion-<version>.hnmod
+```
+
+The secret key is never in this repository. It can be given a password without
+changing the key pair (`minisign -C -s secret-key`), so the public key above
+stays valid.
+
 ## Licence
 
 The mod is MIT (see [LICENSE](LICENSE)). ViaProxy and ViaProxyOpenAuthMod are
