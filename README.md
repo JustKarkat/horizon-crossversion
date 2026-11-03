@@ -18,24 +18,25 @@ Tested against a vanilla 1.20.1 server (protocol 763) and a 1.21.1 server
 (767): world load, chunks, entities, chat and the tab list all work. ViaProxy
 itself covers servers from 1.0 to 26.3.
 
-**Online-mode servers work through an account added to ViaProxy.** Horizon
-never signs a session hash: the proxy logs in to the server with the Microsoft
-account the player adds to it, once, from Options > Mods > Cross-version >
-Settings (the page shows the Microsoft device code, so a phone is enough). That
-is deliberate. Answering ViaProxy's OpenAuthMod query instead would mean
-signing whatever hash arrives in a login query, and a server a player joins can
-send one too, so it could have the client sign a hash for a server it runs and
-log in as the player there — Horizon's registry review found exactly that in
-0.4.0. The account and its refresh token live in ViaProxy's own save under
-`horizon-mods/.horizon-mod-data/crossversion/viaproxy/`, not in Horizon.
+**Offline-mode servers only.** Horizon never signs a session hash: answering
+ViaProxy's OpenAuthMod query would mean signing whatever hash arrives in a
+login query, and a server a player joins can send one too, so it could have the
+client sign a hash for a server it runs and log in as the player there —
+Horizon's registry review found exactly that in 0.4.0.
 
-Signed chat works too: from Horizon's Nightly 2026-11-01 on, the client holds
-a chat key pair and signs its messages, so online-mode servers with
-`enforce-secure-profile=true` accept them through the proxy
-(`<JustKarkat> …`, not `[Not Secure]`). On Horizon before that nightly (the
-mod's 0.1.x pinned an earlier commit) secure-profile servers refused the chat
-and said "Chat disabled due to missing profile public key" — the client's gap,
-not the proxy's.
+0.6.0–0.7.1 instead let ViaProxy hold a Microsoft account of its own, but that
+sign-in uses the official Minecraft launcher's client id (`00000000402b5328`),
+and Horizon's registry may only sign in through its own Mojang-approved app. So
+the sign-in is gone: online-mode servers cannot be joined. When an updated
+install first uses the mod, the accounts a previous version stored in
+ViaProxy's `saves.json` are deleted (`accountsV4` is emptied), together with
+the old `viaproxy/plugins/` folder; the client never had them.
+Online mode can return with a design that uses Horizon's own session.
+
+Signed chat still works on offline-mode servers: from Horizon's Nightly
+2026-11-01 on, the client holds a chat key pair and signs its messages
+(`<JustKarkat> …`, not `[Not Secure]`). On Horizon before that nightly the
+mod's 0.1.x pinned an earlier commit.
 
 ## What it does, precisely
 
@@ -84,12 +85,11 @@ The join then goes through the proxy without asking the server first.
 
 ### Downloads, and why this costs little
 
-On first use the mod downloads two GPL-3.0 jars it does not bundle — ViaProxy
-and the `ViaProxyOpenAuthMod` plugin — into
+On first use the mod downloads one GPL-3.0 jar it does not bundle — ViaProxy —
+into
 `<game folder>/horizon-mods/.horizon-mod-data/crossversion/viaproxy/`, checking
-each against a SHA-256 pinned in the source. If the machine has no Java 17 or
-newer, it installs Mojang's own Java 21 runtime (the same files the official
-launcher uses, sha1-checked) into `<game home>/runtime/`, once per machine.
+it against a SHA-256 pinned in the source. Nothing else is downloaded: Java 17+
+must already be on the machine (see Requirements).
 
 **Most Minecraft servers are Java programs already.** The cost here is one JVM
 on the player's machine, started only for a join that needs translation, on a
@@ -98,44 +98,55 @@ the game. The game thread blocks once, while the proxy opens its port (about a
 second with the jar cached), not per packet. If you were going to run a
 Minecraft server, you were going to run a JVM anyway.
 
+The proxy runs in an empty directory of its own for each join (no `plugins/`
+folder, a `viaproxy.yml` written fresh), because the mod's data folder is one a
+modpack can write: nothing planted there is loaded. Java is taken only from
+`HORIZON_CROSSVERSION_JAVA`, `JAVA_HOME`, `PATH` or the system's own install
+folders, and never from a path inside the game folder (a `java` in
+`config.json` is ignored).
+
 ## Requirements
 
 - Horizon 26.3 (the pinned commit, `07b7ea3`).
-- Java 17+: an installed one, or the runtime the launcher keeps under
-  `<game home>/runtime/`. Nothing is downloaded.
+- Java 17+, installed outside the game folder. Set `HORIZON_CROSSVERSION_JAVA`
+  to an absolute `java` path if the mod cannot find one.
 - Internet the first time: ViaProxy is about 49 MB.
+- Offline-mode servers. Online mode is not supported.
 
 ## Installing
 
 The mod is native code compiled into Horizon, so the launcher builds it:
 
 ```sh
-horizon-launcher native-build path/to/crossversion-0.1.0.hnmod --trust-native-code
+horizon-launcher native-build path/to/crossversion-0.8.0.hnmod --trust-native-code
 ```
 
-The settings page's "Delete the downloaded ViaProxy" removes the jars only: the
-account added to ViaProxy and its refresh token in `saves.json` stay.
+The settings page's "Delete the downloaded ViaProxy" removes the jar so the
+next join fetches it again. An install updated from 0.6.0–0.7.1 also has the
+Microsoft account those versions stored for ViaProxy deleted the next time
+the mod is used.
 
 Settings live in `horizon-mods/.horizon-mod-data/crossversion/config.json`:
 
 ```json
 {
   "enabled": true,
-  "always": false,
-  "java": null
+  "always": false
 }
 ```
 
 `always` routes every join through the proxy, including 26.3 servers (useful
-when comparing behaviour). `java` names a `java` binary to use instead of the
-one the mod finds or installs. Environment overrides for quick experiments:
-`HORIZON_CROSSVERSION=0` disables the mod, `HORIZON_CROSSVERSION_JAVA=...` picks
-a Java, `HORIZON_CROSSVERSION_DEBUG=1` copies the proxy's log into the game's
-log, `HORIZON_CROSSVERSION_INSTALL_JAVA=1` ignores every installed Java and
-installs Mojang's.
+when comparing behaviour). A `java` key is ignored: Java comes from
+`HORIZON_CROSSVERSION_JAVA` (an absolute path outside the game folder),
+`JAVA_HOME`, `PATH` or the system's install folders, never from this
+modpack-writable file. Environment overrides for quick experiments:
+`HORIZON_CROSSVERSION=0` disables the mod, `HORIZON_CROSSVERSION_DEBUG=1`
+copies the proxy's log into the game's log.
 
 ## What it does not do
 
+- **Online-mode servers.** No account is used or stored; the proxy logs in
+  offline.
 - **Bedrock.** ViaProxy's Bedrock support is incomplete and needs Geyser; not
   wired up here.
 - **Old clients joining a Horizon world.** That is the other direction
@@ -189,6 +200,6 @@ stays valid.
 
 ## Licence
 
-The mod is MIT (see [LICENSE](LICENSE)). ViaProxy and ViaProxyOpenAuthMod are
-downloaded at run time under GPL-3.0, unmodified, and are not part of this
-repository or of the `.hnmod`.
+The mod is MIT (see [LICENSE](LICENSE)). ViaProxy is downloaded at run time
+under GPL-3.0, unmodified, and is not part of this repository or of the
+`.hnmod`.

@@ -1,9 +1,9 @@
 id = "crossversion"
 kind = "native-mod"
 name = "Cross-version"
-summary = "Join servers on older Minecraft versions: picks the version per server, runs ViaProxy locally, and logs in with an account added to the proxy."
+summary = "Join older offline-mode servers: picks the version per server and runs ViaProxy locally on a loopback port."
 description = """
-Horizon speaks one protocol, 26.3 (777). This mod lets it join servers that speak an older one.
+Horizon speaks one protocol, 26.3 (777). This mod lets it join offline-mode servers that speak an older one.
 
 On a join, it reads the server's version from its status reply. If it is not 26.3, it starts ViaProxy on a loopback port and points the join at it; ViaProxy speaks 26.3 to Horizon and the server's own version to the server. A join to a 26.3 server is never routed, and nothing else about the client changes.
 
@@ -11,18 +11,18 @@ The server list shows what ViaProxy can join: a server whose status says another
 
 Edit Server and Direct Connect carry a version switch under their buttons: it steps through auto, 1.8, 1.9, 1.12.2, 1.16.5, 1.20.1, 1.21.1, 1.21.4 and 26.3 for that address, and keeps the choice. That is the version ViaProxy tells the server it is, which is what a server whose status reports the wrong version needs; Horizon itself always speaks 26.3 to the proxy.
 
-Online-mode servers work through an account added to ViaProxy. Horizon never signs a session hash: the proxy logs in with the Microsoft account the player adds to it, once, from Options > Mods > Cross-version > Settings, which shows the Microsoft device code. That is deliberate: answering ViaProxy's OpenAuthMod query instead would mean signing any hash that arrives in a login query, and a server the player joins can send one too, so it could have the client sign a hash for a server it runs and log in as the player there (found in review of 0.4.0). The account and its refresh token live in ViaProxy's own save under horizon-mods/.horizon-mod-data/crossversion/viaproxy/, not in Horizon.
+Offline-mode only. Horizon never signs a session hash: answering ViaProxy's OpenAuthMod query would mean signing whatever hash arrives in a login query, and a server a player joins can send one too, so it could have the client sign one for a server it runs (found in review of 0.4.0). Versions 0.6.0–0.7.1 let ViaProxy hold a Microsoft account instead, but that sign-in uses the official launcher's client id, which Horizon's registry may not ship; 0.8.0 removes it, deletes any account a previous version stored in ViaProxy's saves.json the next time the mod is used, and joins offline only.
 
 What it downloads and runs (stated plainly):
 - ViaProxy 3.4.14, GPL-3.0, from its GitHub release on first use, into horizon-mods/.horizon-mod-data/crossversion/, checked against a SHA-256 pinned in the source. It is not bundled with this mod and is not built from its source.
-- Java: an installed Java 17+ is used, or the runtime Horizon already keeps under `<game home>/runtime/` (including the macOS jre.bundle layout). Nothing is downloaded; without Java 17+ the mod does not start the proxy and says why.
-- ViaProxy runs as a child process of the game, on 127.0.0.1 only, and is stopped when you leave the server (and by a small pid file after a crash).
+- Java: a Java 17+ from HORIZON_CROSSVERSION_JAVA, JAVA_HOME, PATH or the system's install folders. A java inside the game folder (including a `java` key in config.json) is ignored, since modpacks can write there. Nothing is downloaded.
+- ViaProxy runs as a child process of the game, on 127.0.0.1 only, in an empty working directory made for that join (its own empty plugins/ folder, viaproxy.yml written fresh), and is stopped when you leave the server (and by a small pid file after a crash).
 
 Settings live in horizon-mods/.horizon-mod-data/crossversion/config.json: "enabled", "always", and "servers", which names a target version for a network whose front reports the client's own version while its lobbies are older (for example {"minevia.club": "1.8"}). Options > Mods > Cross-version has a settings page that turns the mod on or off and deletes the downloaded ViaProxy.
 
-It does not do: Bedrock servers; old clients joining a Horizon world (that is the other direction); making a non-vanilla client pass server-side anti-cheat; or fixing protocol differences Horizon itself has.
+It does not do: online-mode servers; Bedrock servers; old clients joining a Horizon world (that is the other direction); making a non-vanilla client pass server-side anti-cheat; or fixing protocol differences Horizon itself has.
 
-MIT. Requires Java 17+; an internet connection the first time (about 49 MB for ViaProxy); and, for online-mode servers, a Microsoft account added to ViaProxy once."""
+MIT. Requires Java 17+ outside the game folder; an internet connection the first time (about 49 MB for ViaProxy)."""
 authors = ["JustKarkat"]
 owners = ["JustKarkat"]
 license = "MIT"
@@ -41,3 +41,17 @@ RUTcPJHJYjPW0nmeON4u6rxOS7AxK+s/e3kPaLkJ3lm618iPPc8oP8nWdJQ8k9yYriSZSu091TZ5m7qX
 trusted comment: timestamp:1793657606	file:crossversion-0.7.1.hnmod	hashed\r
 q2Oy6yVv5T+GHc2iM+HxNDImfPcaKGV/XPToNCTQFHSTKJ8+rz5IV4LfJnOBwBp1rZQZoGkExopDrXfZyQybCQ=="""
 changelog = "The MIT notice now ships inside the .hnmod (it is the header of the bundled engine source). The settings page's 'Delete the downloaded ViaProxy' deletes the jars only, so the account added to ViaProxy and its refresh token in saves.json stay. Also: a version switch on Edit Server and Direct Connect: choose what version ViaProxy tells that server it is (auto, 1.8, 1.9, 1.12.2, 1.16.5, 1.20.1, 1.21.1, 1.21.4, 26.3), kept per address, for servers whose status reports the wrong version. Online-mode still logs in through the account added to ViaProxy; the client never signs."
+
+[[versions]]
+version = "0.8.0"
+published = "2026-11-03"
+game = "26.3"
+file = "crossversion-0.8.0.hnmod"
+sha256 = "5b371f1b7b3582e0c92aa1dc22b491b50c024fe95833aa2bd9457189631caafd"
+signature = """
+untrusted comment: signature from rsign secret key\r
+RUTcPJHJYjPW0vc8h9pG+LC/9EkYg60UM28gNkxJ31iDOXapyV80qqnB9H12OuOtzBmPkbB33fkh0IKE5O8zcCzat0jyj6Tpqw8=\r
+trusted comment: timestamp:1793679858\tfile:crossversion-0.8.0.hnmod\thashed\r
+3hY5NK517bzva/2q54Pmj9QXO3z6WF0WWMfuA8T9H8qCuOe6TYnmYB5eEagRMpZUNK/ICcrfPEx+DE303XIOAQ==\r
+"""
+changelog = "Offline mode only. The Microsoft sign-in is removed: it used the official launcher's client id, which Horizon's registry may not ship, and 0.7.1 was revoked for it. On the first use after updating, any account a previous version stored in ViaProxy's saves.json is deleted, together with the old viaproxy/plugins folder. Hardening: the proxy runs in a fresh working directory for each join (nothing from the modpack-writable data folder is loaded, and viaproxy.yml is written fresh), Java is taken only from HORIZON_CROSSVERSION_JAVA, JAVA_HOME, PATH or the system's install folders and never from inside the game folder (a java key in config.json is ignored), and the mod's data folder is Horizon's own. Settings page: on/off and delete the downloaded ViaProxy."

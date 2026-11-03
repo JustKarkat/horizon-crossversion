@@ -118,8 +118,11 @@ def main():
         report = {"stage": str(output), "stage_changed": changed,
                   "horizon_revision": PIN, "staging_seconds": time.monotonic()-started}
         if args.action != "stage":
+            # The mod's tests are injected into the library (net.rs), so they
+            # only exist under --lib; check and build test the game's binary.
+            target_flag = ["--lib"] if args.action == "test" else ["--bin", "horizon-client"]
             command = ["cargo", args.action, "--locked", "--offline", "-p", "horizon-client",
-                       "--bin", "horizon-client", "--no-default-features", "--target-dir", str(target)]
+                       *target_flag, "--no-default-features", "--target-dir", str(target)]
             if args.action == "build":
                 command.extend(["--profile", "fast"])
             if args.action == "test":

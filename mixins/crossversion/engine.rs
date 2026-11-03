@@ -27,8 +27,8 @@
 // The proxy manager.
 //
 // Injected into `crates/horizon-client/src/net.rs` by horizon-mixins and
-// compiled into the client library, so it can reach the game's own ping,
-// account and logging code.
+// compiled into the client library, so it can reach the game's own ping and
+// logging code.
 //
 // A join to a server that is not 26.3 is pointed at a ViaProxy instance this
 // module starts on a loopback port. The proxy speaks 26.3 to the client and the
@@ -61,10 +61,12 @@ const PING_TIMEOUT: Duration = Duration::from_secs(4);
 const DOWNLOAD_LIMIT: u64 = 128 * 1024 * 1024;
 
 /// The mod's data folder, the same place native mods keep their settings:
-/// `<game folder>/horizon-mods/.horizon-mod-data/<id>/`.
+/// `<game folder>/horizon-mods/.horizon-mod-data/<id>/`. Horizon's own game
+/// folder (`logging::game_home`: `HORIZON_HOME` when the launcher set it,
+/// else the platform default) rather than the process's current directory,
+/// so the path is the game's wherever the process was started from.
 fn data_dir() -> PathBuf {
-    std::env::current_dir()
-        .unwrap_or_else(|_| PathBuf::from("."))
+    crate::logging::game_home()
         .join("horizon-mods")
         .join(".horizon-mod-data")
         .join("crossversion")
@@ -76,8 +78,6 @@ struct Config {
     enabled: bool,
     /// Use the proxy even when the server is 26.3 (diagnostics).
     always: bool,
-    /// A `java` to use instead of finding or installing one.
-    java: Option<PathBuf>,
     /// Servers the status cannot describe: address -> the target version to
     /// translate to (for a network whose front reports the client's own
     /// version while its lobbies are older).
@@ -92,15 +92,34 @@ impl Default for Config {
                 Ok("0") | Ok("off")
             ),
             always: std::env::var_os("HORIZON_CROSSVERSION_ALWAYS").is_some(),
-            java: std::env::var_os("HORIZON_CROSSVERSION_JAVA").map(PathBuf::from),
             servers: Vec::new(),
         }
     }
 }
 
 static CONFIG: Mutex<Option<Config>> = Mutex::new(None);
+static CLEANED: Mutex<bool> = Mutex::new(false);
+
+/// Whatever an older version left for ViaProxy in the data folder is removed
+/// the first time this version uses the mod at all (a join, or the mods list
+/// asking for its summary), not only when a proxy is started: the accounts
+/// must be gone before anyone can rely on them, and a `plugins/` folder must
+/// never be loaded.
+fn clean_legacy_state_once() {
+    let mut done = CLEANED.lock().unwrap_or_else(|e| e.into_inner());
+    if *done {
+        return;
+    }
+    *done = true;
+    let folder = data_dir().join("viaproxy");
+    if fs::remove_dir_all(folder.join("plugins")).is_ok() {
+        eprintln!("[crossversion] removed the old viaproxy/plugins folder");
+    }
+    strip_stored_accounts(&folder.join("saves.json"));
+}
 
 fn config() -> Config {
+    clean_legacy_state_once();
     let mut slot = CONFIG.lock().unwrap_or_else(|e| e.into_inner());
     slot.get_or_insert_with(|| {
         let defaults = Config::default();
@@ -126,9 +145,9 @@ fn config() -> Config {
                 json["enabled"].as_bool().unwrap_or(defaults.enabled)
             },
             always: json["always"].as_bool().unwrap_or(defaults.always) || defaults.always,
-            java: defaults
-                .java
-                .or_else(|| json["java"].as_str().map(PathBuf::from)),
+            // A `java` in the file is ignored on purpose: the file sits in a
+            // folder modpacks can write, and Java is only taken from the
+            // environment or a verified path outside the game folder.
             servers: json["servers"]
                 .as_object()
                 .map(|servers| {
@@ -167,7 +186,7 @@ pub fn route(address: &str) -> Option<String> {
     }
     // A server transfer comes back to this address on purpose (ViaProxy
     // rewrites the transfer to itself): the connection is already translated,
-    // so it must not be routed again, and its login still needs the account.
+    // so it must not be routed again.
     if let Some(port) = our_port(address) {
         hold(port);
         return None;
@@ -209,7 +228,7 @@ pub fn route(address: &str) -> Option<String> {
             protocol.map_or_else(|| "?".to_owned(), |protocol| protocol.to_string())
         ),
     }
-    match ensure_proxy(address, &settings, forced.as_deref()) {
+    match ensure_proxy(address, forced.as_deref()) {
         Ok(port) => {
             hold(port);
             Some(format!("127.0.0.1:{port}"))
@@ -305,10 +324,58 @@ fn stop_if_idle(port: u16, attempts: u8) {
 fn stop(mut proxy: Proxy) {
     let _ = proxy.child.kill();
     let _ = proxy.child.wait();
+    // Its working directory was made for this proxy alone; take it away.
+    let _ = fs::remove_dir_all(run_dir(proxy.port));
+}
+
+/// A proxy's own working directory: empty but for the settings file written
+/// for this start, so nothing a modpack put in the data folder is loaded.
+fn run_dir(port: u16) -> PathBuf {
+    data_dir()
+        .join("viaproxy")
+        .join("run")
+        .join(port.to_string())
+}
+
+/// The proxy's settings, written fresh: the same values passed on the
+/// command line, plus the offline default. A stale or planted file is
+/// overwritten before the proxy starts.
+fn write_viaproxy_yml(
+    run: &Path,
+    target: &str,
+    port: u16,
+    version: Option<&str>,
+) -> Result<(), String> {
+    let body = format!(
+        "bind-address: \"127.0.0.1:{port}\"\ntarget-address: \"{target}\"\n\
+         target-version: \"{}\"\nauth-method: NONE\nproxy-online-mode: false\n",
+        version.unwrap_or("auto")
+    );
+    let path = run.join("viaproxy.yml");
+    fs::write(&path, body).map_err(|error| format!("{}: {error}", path.display()))
+}
+
+/// Working directories a crashed run left behind: no proxy is listening on
+/// those ports now, so they hold nothing worth keeping.
+fn sweep_run_dirs(keep: &[u16]) {
+    let folder = data_dir().join("viaproxy").join("run");
+    let Ok(entries) = fs::read_dir(&folder) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let port = entry.file_name().to_string_lossy().parse::<u16>().ok();
+        if port.is_some_and(|port| keep.contains(&port)) {
+            continue;
+        }
+        let keep_running = port.is_some_and(listening);
+        if !keep_running {
+            let _ = fs::remove_dir_all(entry.path());
+        }
+    }
 }
 
 /// A port this instance of ViaProxy is listening on, or a fresh one.
-fn ensure_proxy(target: &str, settings: &Config, version: Option<&str>) -> Result<u16, String> {
+fn ensure_proxy(target: &str, version: Option<&str>) -> Result<u16, String> {
     let mut proxies = PROXIES.lock().unwrap_or_else(|e| e.into_inner());
     // Reuse a live one; drop a dead one.
     if let Some(index) = proxies.iter().position(|proxy| proxy.target == target) {
@@ -318,9 +385,9 @@ fn ensure_proxy(target: &str, settings: &Config, version: Option<&str>) -> Resul
         stop(proxies.remove(index));
     }
     let port = free_port()?;
-    let java = find_java(settings)?;
+    let java = find_java()?;
     let jar = ensure_assets()?;
-    let child = spawn(&java, &jar, target, port, version, proxy_account())?;
+    let child = spawn(&java, &jar, target, port, version)?;
     proxies.push(Proxy {
         port,
         target: target.to_owned(),
@@ -349,8 +416,17 @@ fn spawn(
     target: &str,
     port: u16,
     version: Option<&str>,
-    account: Option<usize>,
 ) -> Result<Child, String> {
+    // ViaProxy loads every jar in `plugins/` under its working directory and
+    // reads its settings from `viaproxy.yml` there. The mod's data folder is
+    // one a modpack can write, so the proxy runs in a directory this start
+    // creates empty (no `plugins/`) with the settings file written fresh;
+    // the options that matter are also passed on the command line, which
+    // wins over the file.
+    let run = run_dir(port);
+    let _ = fs::remove_dir_all(&run);
+    fs::create_dir_all(&run).map_err(|error| format!("{}: {error}", run.display()))?;
+    write_viaproxy_yml(&run, target, port, version)?;
     let mut child = Command::new(java)
         .arg("-jar")
         .arg(jar)
@@ -358,19 +434,12 @@ fn spawn(
         .args(["--bind-address", &format!("127.0.0.1:{port}")])
         .args(["--target-address", target])
         .args(["--target-version", version.unwrap_or("auto")])
-        // The client never signs a session hash: a server must not be able to
-        // have it sign one for somewhere else. So the proxy authenticates with
-        // the account the player added to it, or not at all.
-        .args(match account {
-            Some(index) => vec![
-                "--auth-method".to_owned(),
-                "ACCOUNT".to_owned(),
-                "--minecraft-account-index".to_owned(),
-                index.to_string(),
-            ],
-            None => vec!["--auth-method".to_owned(), "NONE".to_owned()],
-        })
-        .current_dir(jar.parent().unwrap_or(Path::new(".")))
+        // Offline mode only. The client never signs a session hash, and the
+        // proxy is not given an account either: ViaProxy's Microsoft sign-in
+        // uses the official launcher's client id, which Horizon's registry
+        // may not ship under its own name.
+        .args(["--auth-method", "NONE"])
+        .current_dir(&run)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -444,24 +513,13 @@ fn drain(mut pipe: impl Read + Send + 'static, keep: Option<Arc<Mutex<Vec<String
     });
 }
 
-/// The ViaProxy jar, with its plugin beside it in `plugins/`.
+/// The ViaProxy jar. Anything an older version put beside it that the proxy
+/// must not load is taken away first (see `clean_legacy_state_once`).
 fn ensure_assets() -> Result<PathBuf, String> {
     let folder = data_dir().join("viaproxy");
     let jar = folder.join(format!("ViaProxy-{VIAPROXY_VERSION}.jar"));
     fs::create_dir_all(&folder).map_err(|e| format!("{}: {e}", folder.display()))?;
-    // An install upgraded from 0.4.x still has the OpenAuthMod plugin, which is
-    // how that version had the client sign session hashes. Remove it.
-    if let Ok(entries) = fs::read_dir(folder.join("plugins")) {
-        for entry in entries.flatten() {
-            if entry
-                .file_name()
-                .to_string_lossy()
-                .starts_with("ViaProxyOpenAuthMod")
-            {
-                let _ = fs::remove_file(entry.path());
-            }
-        }
-    }
+    clean_legacy_state_once();
     fetch(
         &format!(
             "https://github.com/ViaVersion/ViaProxy/releases/download/v{VIAPROXY_VERSION}/ViaProxy-{VIAPROXY_VERSION}.jar"
@@ -470,6 +528,34 @@ fn ensure_assets() -> Result<PathBuf, String> {
         VIAPROXY_SHA256,
     )?;
     Ok(jar)
+}
+
+/// 0.6.0–0.7.1 could have a Microsoft account (and its refresh token) in
+/// ViaProxy's own save. Online mode is gone, so the accounts go too: the
+/// file keeps its other keys and an empty `accountsV4`.
+fn strip_stored_accounts(path: &Path) {
+    let Ok(text) = fs::read_to_string(path) else {
+        return;
+    };
+    let Ok(mut json) = serde_json::from_str::<serde_json::Value>(&text) else {
+        let _ = fs::remove_file(path);
+        return;
+    };
+    let Some(accounts) = json["accountsV4"].as_array() else {
+        return;
+    };
+    if accounts.is_empty() {
+        return;
+    }
+    let removed = accounts.len();
+    json["accountsV4"] = serde_json::Value::Array(Vec::new());
+    if let Ok(body) = serde_json::to_vec_pretty(&json) {
+        let _ = fs::write(path, body);
+        eprintln!(
+            "[crossversion] removed {removed} stored account(s) from ViaProxy's saves.json; \
+             online-mode servers are not supported"
+        );
+    }
 }
 
 fn fetch(url: &str, path: &Path, sha256: &str) -> Result<(), String> {
@@ -527,26 +613,17 @@ fn digest(path: &Path) -> Result<String, String> {
 
 // ---- Java ----
 
-/// A Java 17+ to run the proxy with: the one named in the config, a runtime the
-/// launcher already keeps under the game home, or one installed on the machine.
-/// Nothing is downloaded: a machine without Java says so.
-fn find_java(settings: &Config) -> Result<PathBuf, String> {
-    if let Some(java) = &settings.java {
-        return if java.is_file() {
-            Ok(java.clone())
-        } else {
-            Err(format!(
-                "config names {}, which is not there",
-                java.display()
-            ))
-        };
-    }
+/// A Java 17+ to run the proxy with. Only the environment (`HORIZON_CROSSVERSION_JAVA`,
+/// `JAVA_HOME`, `PATH`) and the system's own install folders count: the game folder is
+/// writable by modpacks, so a `runtime/` there, a `java` in the config, or any other
+/// path inside it is never used. Nothing is downloaded.
+fn find_java() -> Result<PathBuf, String> {
     if let Some(java) = installed_java() {
         return Ok(java);
     }
     Err(format!(
-        "no Java {JAVA_MINIMUM}+ found. Install one, or point \"java\" in \
-         horizon-mods/.horizon-mod-data/crossversion/config.json at it"
+        "no Java {JAVA_MINIMUM}+ found. Install one, or set HORIZON_CROSSVERSION_JAVA \
+         to an absolute java path outside the game folder"
     ))
 }
 
@@ -555,30 +632,29 @@ fn java_program(home: &Path) -> PathBuf {
         .join(if cfg!(windows) { "javaw.exe" } else { "java" })
 }
 
-/// The first Java home at or above `JAVA_MINIMUM` this machine has.
+/// Whether `java` may be run: an absolute path that is really a file and not
+/// inside the game folder, which modpacks can write.
+fn usable_java(java: &Path) -> bool {
+    usable_java_at(&crate::logging::game_home(), java)
+}
+
+fn usable_java_at(home: &Path, java: &Path) -> bool {
+    if !java.is_absolute() || !java.is_file() {
+        return false;
+    }
+    match (java.canonicalize(), home.canonicalize()) {
+        (Ok(java), Ok(home)) => !java.starts_with(&home),
+        _ => false,
+    }
+}
+
+/// The first Java home at or above `JAVA_MINIMUM` the environment names or the
+/// system has: the explicit override, `JAVA_HOME`, `PATH`, then the platform's
+/// install folders. Anything that resolves inside the game folder is skipped.
 fn installed_java() -> Option<PathBuf> {
     let mut homes: Vec<PathBuf> = Vec::new();
-    // What Horizon itself uses, beside the game: <game home>/runtime follows
-    // the official launcher's <component>/<platform>/<component> layout, which
-    // macOS fills with a jre.bundle.
-    let runtime = crate::logging::game_home().join("runtime");
-    for component in std::fs::read_dir(&runtime).into_iter().flatten().flatten() {
-        for platform in std::fs::read_dir(component.path())
-            .into_iter()
-            .flatten()
-            .flatten()
-        {
-            for home in std::fs::read_dir(platform.path())
-                .into_iter()
-                .flatten()
-                .flatten()
-            {
-                let home = home.path();
-                homes.push(home.join("Contents").join("Home"));
-                homes.push(home.join("jre.bundle").join("Contents").join("Home"));
-                homes.push(home);
-            }
-        }
+    if let Some(java) = std::env::var_os("HORIZON_CROSSVERSION_JAVA") {
+        homes.push(PathBuf::from(java));
     }
     if let Some(home) = std::env::var_os("JAVA_HOME") {
         homes.push(PathBuf::from(home));
@@ -598,13 +674,22 @@ fn installed_java() -> Option<PathBuf> {
             }
         }
     }
-    homes
-        .into_iter()
-        .find(|home| match release_major(home) {
-            Some(major) => major >= JAVA_MINIMUM && java_program(home).is_file(),
-            None => false,
-        })
-        .map(|home| java_program(&home))
+    let mut programs: Vec<PathBuf> = Vec::new();
+    for home in homes {
+        programs.push(java_program(&home));
+        // The explicit override may name the binary itself.
+        programs.push(home);
+    }
+    programs.into_iter().find(|program| {
+        usable_java(program)
+            && release_major(
+                program
+                    .parent()
+                    .and_then(Path::parent)
+                    .unwrap_or(Path::new("")),
+            )
+            .is_some_and(|major| major >= JAVA_MINIMUM)
+    })
 }
 
 /// The folders installers put Java homes in, per platform.
@@ -650,138 +735,11 @@ fn release_major(home: &Path) -> Option<u32> {
     }
 }
 
-// ---- Account ----
-
-/// The index, in ViaProxy's own list, of the Microsoft account the player added
-/// there. The proxy logs in to online-mode servers with it; the client never
-/// touches the session, so no server can make it sign anything.
-pub fn proxy_account() -> Option<usize> {
-    let text = fs::read_to_string(data_dir().join("viaproxy").join("saves.json")).ok()?;
-    let json: serde_json::Value = serde_json::from_str(&text).ok()?;
-    json["accountsV4"].as_array()?.iter().position(|account| {
-        account["accountType"]
-            .as_str()
-            .is_some_and(|kind| kind.ends_with("MicrosoftAccount"))
-    })
-}
-
-/// Where the sign-in is, as the settings page words it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum SignIn {
-    /// Nothing started.
-    Idle,
-    /// Waiting for the player at Microsoft's page with this code.
-    Code { url: String, code: String },
-    /// The account was added; the proxy uses it from now on.
-    Done,
-    /// It timed out or failed; starting again asks Microsoft again.
-    Failed(String),
-}
-
-static SIGN_IN: Mutex<SignIn> = Mutex::new(SignIn::Idle);
-static SIGN_IN_CHILD: Mutex<Option<Child>> = Mutex::new(None);
-
-pub fn sign_in_state() -> SignIn {
-    if proxy_account().is_some() {
-        return SignIn::Done;
-    }
-    SIGN_IN.lock().unwrap_or_else(|e| e.into_inner()).clone()
-}
-
-/// Ask Microsoft for a device code and wait for the player to approve it in a
-/// browser or on a phone. No Java window: ViaProxy's console does the same
-/// sign-in, and the code goes on the settings page.
-pub fn start_sign_in() -> Result<(), String> {
-    if proxy_account().is_some() {
-        return Ok(());
-    }
-    {
-        let child = SIGN_IN_CHILD.lock().unwrap_or_else(|e| e.into_inner());
-        if child.is_some() {
-            return Ok(());
-        }
-    }
-    let settings = config();
-    let java = find_java(&settings)?;
-    let jar = ensure_assets()?;
-    let mut process = Command::new(&java)
-        .arg("-jar")
-        .arg(&jar)
-        .args(["cli", "--bind-address", "127.0.0.1:0"])
-        .current_dir(jar.parent().unwrap_or(Path::new(".")))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|error| format!("cannot start the sign-in: {error}"))?;
-    let mut stdin = process
-        .stdin
-        .take()
-        .ok_or_else(|| "the sign-in has no console".to_owned())?;
-    let stdout = process
-        .stdout
-        .take()
-        .ok_or_else(|| "the sign-in has no output".to_owned())?;
-    *SIGN_IN.lock().unwrap_or_else(|e| e.into_inner()) = SignIn::Failed("starting".to_owned());
-    *SIGN_IN_CHILD.lock().unwrap_or_else(|e| e.into_inner()) = Some(process);
-    std::thread::spawn(move || {
-        use std::io::{BufRead, BufReader, Write};
-        std::thread::sleep(Duration::from_secs(12));
-        let _ = stdin.write_all(b"account add microsoft\n");
-        let _ = stdin.flush();
-        let reader = BufReader::new(stdout);
-        let started = Instant::now();
-        for line in reader.lines() {
-            let Ok(line) = line else { break };
-            if let Some(code) = device_code(&line) {
-                let url = format!("https://www.microsoft.com/link?otc={code}");
-                eprintln!("[crossversion] sign in at {url} with the code {code}");
-                *SIGN_IN.lock().unwrap_or_else(|e| e.into_inner()) = SignIn::Code { url, code };
-            }
-            if proxy_account().is_some() || started.elapsed() > Duration::from_secs(600) {
-                break;
-            }
-        }
-        if proxy_account().is_some() {
-            *SIGN_IN.lock().unwrap_or_else(|e| e.into_inner()) = SignIn::Done;
-        } else if started.elapsed() > Duration::from_secs(600) {
-            *SIGN_IN.lock().unwrap_or_else(|e| e.into_inner()) =
-                SignIn::Failed("the code expired; ask again".to_owned());
-        }
-        let _ = stdin.write_all(b"stop\n");
-        let _ = stdin.flush();
-        std::thread::sleep(Duration::from_secs(3));
-        if let Some(mut child) = SIGN_IN_CHILD
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .take()
-        {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-    });
-    Ok(())
-}
-
-/// `... visit https://www.microsoft.com/link?otc=ABCD1234 ...` or `... the code: ABCD1234`.
-fn device_code(line: &str) -> Option<String> {
-    let text = line.replace("\u{1b}[", "").replace('\x1b', "");
-    let tail = text
-        .split("otc=")
-        .nth(1)
-        .or_else(|| text.split("code: ").nth(1))?;
-    let code: String = tail
-        .chars()
-        .take_while(|c| c.is_ascii_alphanumeric())
-        .collect();
-    (code.len() >= 4).then_some(code)
-}
-
 // ---- Settings ----
 
 /// The mod's own version, shown in Options > Mods. Keep in step with
 /// `horizon-mixin.toml`.
-pub const VERSION: &str = "0.7.1";
+pub const VERSION: &str = "0.8.0";
 
 /// What the settings page shows.
 /// What the version switch needs to know: whether the mod is on at all.
@@ -792,12 +750,9 @@ pub fn settings_summary() -> (bool, String, String) {
 pub fn summary() -> (bool, String, String) {
     let settings = config();
     let enabled = settings.enabled;
-    let java = match &settings.java {
+    let java = match installed_java() {
         Some(path) => path.display().to_string(),
-        None => match installed_java() {
-            Some(path) => path.display().to_string(),
-            None => "Mojang's Java, downloaded on first use".to_owned(),
-        },
+        None => "No Java 17+ found (install one or set HORIZON_CROSSVERSION_JAVA)".to_owned(),
     };
     (enabled, java, VIAPROXY_VERSION.to_owned())
 }
@@ -824,7 +779,6 @@ fn write_config(settings: &Config) {
     let body = serde_json::json!({
         "enabled": settings.enabled,
         "always": settings.always,
-        "java": settings.java.as_ref().map(|path| path.display().to_string()),
         "servers": servers,
     });
     let _ = fs::write(&path, serde_json::to_vec_pretty(&body).unwrap_or_default());
@@ -864,8 +818,6 @@ pub fn cycle_server_version(address: &str) -> String {
 }
 
 /// Drop the downloaded ViaProxy so the next join fetches it again.
-/// Delete the downloaded jars, and nothing else: the account and its refresh
-/// token in `saves.json`, and the proxy's own settings, stay.
 pub fn clear_downloads() -> Result<(), String> {
     let folder = data_dir().join("viaproxy");
     let mut removed = 0;
@@ -959,6 +911,13 @@ fn reap_once() {
         return;
     }
     *done = true;
+    reap_leftovers();
+    sweep_run_dirs(&[]);
+}
+
+/// Kill the proxies a crashed run left behind: the pid file lists them, and
+/// only a process that still looks like one of ours is killed.
+fn reap_leftovers() {
     let path = data_dir().join("proxies.json");
     let Ok(text) = fs::read_to_string(&path) else {
         return;
@@ -1050,5 +1009,50 @@ mod tests {
     #[test]
     fn a_java_home_needs_a_release_file() {
         assert_eq!(release_major(Path::new("/nonexistent")), None);
+    }
+
+    #[test]
+    fn stored_accounts_are_removed_from_a_previous_sign_in() {
+        let folder =
+            std::env::temp_dir().join(format!("crossversion-saves-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&folder);
+        fs::create_dir_all(&folder).unwrap();
+        let path = folder.join("saves.json");
+        fs::write(
+            &path,
+            r#"{"accountsV4":[{"accountType":"MSA-MicrosoftAccount"},{"accountType":"DeviceCodeAccount"}],"ui":{"notice":true}}"#,
+        )
+        .unwrap();
+        strip_stored_accounts(&path);
+        let json: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(json["accountsV4"].as_array().unwrap().len(), 0);
+        assert_eq!(json["ui"]["notice"], true);
+        // Running again changes nothing and does not fail.
+        strip_stored_accounts(&path);
+        let again: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(again["ui"]["notice"], true);
+        let _ = fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn java_inside_the_game_folder_is_refused() {
+        let folder = std::env::temp_dir().join(format!("crossversion-java-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&folder);
+        let game = folder.join("game");
+        let outside = folder.join("jdk");
+        for dir in [&game, &outside] {
+            fs::create_dir_all(dir).unwrap();
+        }
+        let inside_java = game.join("runtime").join("java");
+        let outside_java = outside.join("java");
+        fs::create_dir_all(inside_java.parent().unwrap()).unwrap();
+        fs::write(&inside_java, b"#!/bin/sh\n").unwrap();
+        fs::write(&outside_java, b"#!/bin/sh\n").unwrap();
+        assert!(!usable_java_at(&game, &inside_java));
+        assert!(usable_java_at(&game, &outside_java));
+        assert!(!usable_java_at(&game, Path::new("java")));
+        let _ = fs::remove_dir_all(&folder);
     }
 }
